@@ -284,3 +284,4 @@ El código escrito en el lenguaje Python envía strings conformados por dos cara
 - Dirección: F(recto), I(izquierda), D(derecha), 1(giro leve izquierda), 2(giro leve dereche), S(parar).
 - Potencia: H(alta/255), M(media/195), L(baja/115).
 # carrito7515
+# carrito7515
