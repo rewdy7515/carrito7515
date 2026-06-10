@@ -285,3 +285,4 @@ El código escrito en el lenguaje Python envía strings conformados por dos cara
 - Potencia: H(alta/255), M(media/195), L(baja/115).
 # carrito7515
 # carrito7515
+# carrito7515
