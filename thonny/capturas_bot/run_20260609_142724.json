@@ -1,0 +1,120 @@
+{
+  "video_path": "capturas_bot/run_20260609_142724.mp4",
+  "timestamps_path": "capturas_bot/run_20260609_142724.timestamps.csv",
+  "json_path": "capturas_bot/run_20260609_142724.json",
+  "width": 320,
+  "height": 240,
+  "fps": 30.0,
+  "started_at_epoch": 1781029644.6803029,
+  "started_at_local": "2026-06-09 14:27:24",
+  "markers": [
+    {
+      "frame_index": 135,
+      "elapsed_seconds": 5.329182,
+      "epoch_seconds": 1781029650.009485,
+      "label": "mouse_click_error",
+      "speed": 220,
+      "angle": 103
+    },
+    {
+      "frame_index": 353,
+      "elapsed_seconds": 12.565348,
+      "epoch_seconds": 1781029657.245651,
+      "label": "mouse_click_error",
+      "speed": 220,
+      "angle": 103
+    },
+    {
+      "frame_index": 499,
+      "elapsed_seconds": 17.425565,
+      "epoch_seconds": 1781029662.105868,
+      "label": "mouse_click_error",
+      "speed": 220,
+      "angle": 103
+    },
+    {
+      "frame_index": 537,
+      "elapsed_seconds": 18.689464,
+      "epoch_seconds": 1781029663.369766,
+      "label": "mouse_click_error",
+      "speed": 250,
+      "angle": 86
+    },
+    {
+      "frame_index": 578,
+      "elapsed_seconds": 20.063337,
+      "epoch_seconds": 1781029664.74364,
+      "label": "mouse_click_error",
+      "speed": 220,
+      "angle": 103
+    },
+    {
+      "frame_index": 610,
+      "elapsed_seconds": 21.110019,
+      "epoch_seconds": 1781029665.790322,
+      "label": "mouse_click_error",
+      "speed": 220,
+      "angle": 103
+    },
+    {
+      "frame_index": 666,
+      "elapsed_seconds": 22.984847,
+      "epoch_seconds": 1781029667.665149,
+      "label": "mouse_click_error",
+      "speed": 250,
+      "angle": 86
+    },
+    {
+      "frame_index": 729,
+      "elapsed_seconds": 25.067647,
+      "epoch_seconds": 1781029669.74795,
+      "label": "mouse_click_error",
+      "speed": 220,
+      "angle": 103
+    },
+    {
+      "frame_index": 985,
+      "elapsed_seconds": 33.576739,
+      "epoch_seconds": 1781029678.257041,
+      "label": "mouse_click_error",
+      "speed": 250,
+      "angle": 86
+    },
+    {
+      "frame_index": 1013,
+      "elapsed_seconds": 34.521832,
+      "epoch_seconds": 1781029679.202135,
+      "label": "mouse_click_error",
+      "speed": 250,
+      "angle": 86
+    },
+    {
+      "frame_index": 1089,
+      "elapsed_seconds": 37.068646,
+      "epoch_seconds": 1781029681.748949,
+      "label": "mouse_click_error",
+      "speed": 220,
+      "angle": 103
+    },
+    {
+      "frame_index": 1173,
+      "elapsed_seconds": 39.816694,
+      "epoch_seconds": 1781029684.496997,
+      "label": "mouse_click_error",
+      "speed": 220,
+      "angle": 103
+    },
+    {
+      "frame_index": 1390,
+      "elapsed_seconds": 47.047335,
+      "epoch_seconds": 1781029691.727638,
+      "label": "mouse_click_error",
+      "speed": 250,
+      "angle": 86
+    }
+  ],
+  "ended_at_epoch": 1781029693.0885777,
+  "ended_at_local": "2026-06-09 14:28:13",
+  "frames_written": 1424,
+  "duration_seconds": 48.408
+}

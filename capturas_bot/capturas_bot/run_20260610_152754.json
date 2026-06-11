@@ -1,0 +1,252 @@
+{
+  "video_path": "capturas_bot/run_20260610_152754.mp4",
+  "timestamps_path": "capturas_bot/run_20260610_152754.timestamps.csv",
+  "json_path": "capturas_bot/run_20260610_152754.json",
+  "width": 320,
+  "height": 240,
+  "fps": 30.0,
+  "started_at_epoch": 1781119674.2884989,
+  "started_at_local": "2026-06-10 15:27:54",
+  "markers": [
+    {
+      "frame_index": 7,
+      "elapsed_seconds": 2.399581,
+      "epoch_seconds": 1781119676.68808,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 32,
+      "elapsed_seconds": 3.831129,
+      "epoch_seconds": 1781119678.119628,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 48,
+      "elapsed_seconds": 4.723023,
+      "epoch_seconds": 1781119679.011522,
+      "label": "auto_curve_too_long",
+      "speed": 212,
+      "angle": 82
+    },
+    {
+      "frame_index": 81,
+      "elapsed_seconds": 6.88291,
+      "epoch_seconds": 1781119681.171409,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 105,
+      "elapsed_seconds": 8.286755,
+      "epoch_seconds": 1781119682.575254,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 119,
+      "elapsed_seconds": 9.143869,
+      "epoch_seconds": 1781119683.432368,
+      "label": "auto_curve_too_long",
+      "speed": 212,
+      "angle": 73
+    },
+    {
+      "frame_index": 145,
+      "elapsed_seconds": 10.806464,
+      "epoch_seconds": 1781119685.094963,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 170,
+      "elapsed_seconds": 12.251865,
+      "epoch_seconds": 1781119686.540364,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 209,
+      "elapsed_seconds": 14.730729,
+      "epoch_seconds": 1781119689.019228,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 237,
+      "elapsed_seconds": 16.137679,
+      "epoch_seconds": 1781119690.426178,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 255,
+      "elapsed_seconds": 17.009991,
+      "epoch_seconds": 1781119691.29849,
+      "label": "auto_curve_too_long",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 289,
+      "elapsed_seconds": 19.101904,
+      "epoch_seconds": 1781119693.390403,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 314,
+      "elapsed_seconds": 20.574303,
+      "epoch_seconds": 1781119694.862802,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 358,
+      "elapsed_seconds": 23.369326,
+      "epoch_seconds": 1781119697.657825,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 386,
+      "elapsed_seconds": 24.816935,
+      "epoch_seconds": 1781119699.105434,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 394,
+      "elapsed_seconds": 25.2564,
+      "epoch_seconds": 1781119699.544899,
+      "label": "auto_curve_too_long",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 423,
+      "elapsed_seconds": 27.049078,
+      "epoch_seconds": 1781119701.337577,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 447,
+      "elapsed_seconds": 28.490535,
+      "epoch_seconds": 1781119702.779034,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 495,
+      "elapsed_seconds": 31.509745,
+      "epoch_seconds": 1781119705.798244,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 525,
+      "elapsed_seconds": 32.935481,
+      "epoch_seconds": 1781119707.22398,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 533,
+      "elapsed_seconds": 33.329569,
+      "epoch_seconds": 1781119707.618068,
+      "label": "auto_curve_too_long",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 572,
+      "elapsed_seconds": 35.661293,
+      "epoch_seconds": 1781119709.949792,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 597,
+      "elapsed_seconds": 37.074303,
+      "epoch_seconds": 1781119711.362802,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 641,
+      "elapsed_seconds": 39.785592,
+      "epoch_seconds": 1781119714.074091,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 667,
+      "elapsed_seconds": 41.189847,
+      "epoch_seconds": 1781119715.478345,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 675,
+      "elapsed_seconds": 41.652771,
+      "epoch_seconds": 1781119715.94127,
+      "label": "auto_curve_too_long",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 702,
+      "elapsed_seconds": 43.357245,
+      "epoch_seconds": 1781119717.645744,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 734,
+      "elapsed_seconds": 45.301796,
+      "epoch_seconds": 1781119719.590295,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    }
+  ],
+  "frames_written": 761,
+  "duration_seconds": 47.218,
+  "last_checkpoint_epoch": 1781119721.5069363,
+  "last_checkpoint_local": "2026-06-10 15:28:41",
+  "finalized": true,
+  "initial_visual_signature": {
+    "wall_mode": "both",
+    "left_wall_px": 120.0,
+    "right_wall_px": 160.0,
+    "width_px": 264.69,
+    "center_offset_px": -20.0,
+    "dark_ratio_center": 0.619
+  },
+  "latest_rear_distance_cm": 194.96,
+  "ended_at_epoch": 1781119721.5069363,
+  "ended_at_local": "2026-06-10 15:28:41"
+}

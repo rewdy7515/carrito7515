@@ -1,0 +1,285 @@
+(base) andresvillarreal@Andress-MacBook-Air Ingenieros-Paralelos-main-3 % python3 src/MainCode.py --simulate
+[SISTEMA] Algoritmo Raycasting iniciado. Giro ciego: AUTO
+[SIM] Modo simulación activo. No se enviarán comandos al Arduino.
+[SIM] Usando pista sintética interna.
+[SIM] <0,86>
+[WARN] OpenCV no pudo abrir ventanas: Unknown C++ exception from OpenCV code
+[WARN] Continuando en modo headless.
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[EVASION] Bloque ROJO detectado en 205. Forzando centro a 315
+[SIM] <190,80>
+| Estado: EVADIENDO_ROJO  | Centro: 205 | Muros: [I:70 D:250] | Vel: 190 | Angulo:  80 |
+[SIM] <250,86>
+[SIM] <220,83>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+[SIM] <220,96>
+[SIM] <220,88>
+[EVASION] Bloque VERDE detectado en 110. Forzando centro a 0
+[SIM] <190,98>
+| Estado: EVADIENDO_VERDE | Centro:  60 | Muros: [I:15 D:250] | Vel: 190 | Angulo:  98 |
+[SIM] <220,88>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:105 D:215] | Vel: 250 | Angulo:  86 |
+
+[INFO] Espacio libre a la izquierda -> antihorario confirmado
+
+[SIM] <220,103>
+| Estado: MURO_FRONTAL    | Centro: 160 | Muros: [I:-1 D:-1] | Vel: 220 | Angulo: 103 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[EVASION] Bloque ROJO detectado en 205. Forzando centro a 315
+[SIM] <190,60>
+[SIM] <190,80>
+| Estado: EVADIENDO_ROJO  | Centro: 205 | Muros: [I:70 D:250] | Vel: 190 | Angulo:  80 |
+[SIM] <250,86>
+[SIM] <220,76>
+[SIM] <220,83>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+[SIM] <220,96>
+[SIM] <220,88>
+[EVASION] Bloque VERDE detectado en 110. Forzando centro a 0
+[SIM] <190,98>
+| Estado: EVADIENDO_VERDE | Centro:  60 | Muros: [I:15 D:250] | Vel: 190 | Angulo:  98 |
+[SIM] <220,76>
+[SIM] <220,88>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:105 D:215] | Vel: 250 | Angulo:  86 |
+[SIM] <220,103>
+| Estado: MURO_FRONTAL    | Centro: 160 | Muros: [I:-1 D:-1] | Vel: 220 | Angulo: 103 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[EVASION] Bloque ROJO detectado en 205. Forzando centro a 315
+[SIM] <190,60>
+[SIM] <190,80>
+| Estado: EVADIENDO_ROJO  | Centro: 205 | Muros: [I:70 D:250] | Vel: 190 | Angulo:  80 |
+[SIM] <250,86>
+[SIM] <220,83>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+[SIM] <220,96>
+[SIM] <220,88>
+[EVASION] Bloque VERDE detectado en 110. Forzando centro a 0
+[SIM] <190,120>
+| Estado: EVADIENDO_VERDE | Centro:  60 | Muros: [I:15 D:250] | Vel: 190 | Angulo:  98 |
+[SIM] <190,98>
+[SIM] <220,76>
+[SIM] <220,88>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:105 D:215] | Vel: 250 | Angulo:  86 |
+[SIM] <250,86>
+[SIM] <220,103>
+| Estado: MURO_FRONTAL    | Centro: 160 | Muros: [I:-1 D:-1] | Vel: 220 | Angulo: 103 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[EVASION] Bloque ROJO detectado en 205. Forzando centro a 315
+[SIM] <190,80>
+| Estado: EVADIENDO_ROJO  | Centro: 205 | Muros: [I:70 D:250] | Vel: 190 | Angulo:  80 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  76 |
+[SIM] <220,76>
+[SIM] <220,83>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+[SIM] <220,88>
+| Estado: CENTRADO        | Centro: 132 | Muros: [I:15 D:250] | Vel: 220 | Angulo:  88 |
+[EVASION] Bloque VERDE detectado en 110. Forzando centro a 0
+[SIM] <190,98>
+[SIM] <220,76>
+| Estado: CENTRADO        | Centro: 132 | Muros: [I:15 D:250] | Vel: 220 | Angulo:  88 |
+[SIM] <220,88>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:105 D:215] | Vel: 250 | Angulo:  86 |
+
+[INFO] Vuelta 1/3 completada
+
+[SIM] <220,103>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[EVASION] Bloque ROJO detectado en 205. Forzando centro a 315
+[SIM] <190,80>
+| Estado: EVADIENDO_ROJO  | Centro: 205 | Muros: [I:70 D:250] | Vel: 190 | Angulo:  80 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[SIM] <220,83>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+[SIM] <220,88>
+| Estado: CENTRADO        | Centro: 132 | Muros: [I:15 D:250] | Vel: 220 | Angulo:  88 |
+[EVASION] Bloque VERDE detectado en 110. Forzando centro a 0
+[SIM] <190,98>
+| Estado: CENTRADO        | Centro: 132 | Muros: [I:15 D:250] | Vel: 220 | Angulo:  76 |
+[SIM] <220,88>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:105 D:215] | Vel: 250 | Angulo:  86 |
+[SIM] <220,103>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[EVASION] Bloque ROJO detectado en 205. Forzando centro a 315
+[SIM] <190,80>
+| Estado: EVADIENDO_ROJO  | Centro: 205 | Muros: [I:70 D:250] | Vel: 190 | Angulo:  80 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[SIM] <220,83>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+[SIM] <220,88>
+| Estado: CENTRADO        | Centro: 132 | Muros: [I:15 D:250] | Vel: 220 | Angulo:  88 |
+[EVASION] Bloque VERDE detectado en 110. Forzando centro a 0
+[SIM] <190,98>
+| Estado: EVADIENDO_VERDE | Centro:  60 | Muros: [I:15 D:250] | Vel: 190 | Angulo:  98 |
+[SIM] <220,88>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:105 D:215] | Vel: 250 | Angulo:  86 |
+[SIM] <220,103>
+| Estado: MURO_FRONTAL    | Centro: 160 | Muros: [I:-1 D:-1] | Vel: 220 | Angulo: 103 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[EVASION] Bloque ROJO detectado en 205. Forzando centro a 315
+| Estado: EVADIENDO_ROJO  | Centro: 205 | Muros: [I:70 D:250] | Vel: 190 | Angulo:  80 |
+[SIM] <190,80>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[SIM] <220,76>
+[SIM] <220,83>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+[SIM] <220,96>
+[SIM] <220,88>
+| Estado: CENTRADO        | Centro: 132 | Muros: [I:15 D:250] | Vel: 220 | Angulo:  88 |
+[EVASION] Bloque VERDE detectado en 110. Forzando centro a 0
+[SIM] <190,120>
+[SIM] <190,98>
+| Estado: EVADIENDO_VERDE | Centro:  60 | Muros: [I:15 D:250] | Vel: 190 | Angulo:  98 |
+[SIM] <220,88>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:105 D:215] | Vel: 250 | Angulo:  86 |
+[SIM] <220,103>
+| Estado: MURO_FRONTAL    | Centro: 160 | Muros: [I:-1 D:-1] | Vel: 220 | Angulo: 103 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[EVASION] Bloque ROJO detectado en 205. Forzando centro a 315
+| Estado: EVADIENDO_ROJO  | Centro: 205 | Muros: [I:70 D:250] | Vel: 190 | Angulo:  60 |
+[SIM] <190,80>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[SIM] <220,83>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+[SIM] <220,88>
+| Estado: CENTRADO        | Centro: 132 | Muros: [I:15 D:250] | Vel: 220 | Angulo:  88 |
+[EVASION] Bloque VERDE detectado en 110. Forzando centro a 0
+[SIM] <190,98>
+| Estado: EVADIENDO_VERDE | Centro:  60 | Muros: [I:15 D:250] | Vel: 190 | Angulo:  98 |
+[SIM] <220,88>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:105 D:215] | Vel: 250 | Angulo:  86 |
+
+[INFO] Vuelta 2/3 completada
+
+[SIM] <220,103>
+| Estado: MURO_FRONTAL    | Centro: 160 | Muros: [I:-1 D:-1] | Vel: 220 | Angulo: 103 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[EVASION] Bloque ROJO detectado en 205. Forzando centro a 315
+[SIM] <190,80>
+| Estado: EVADIENDO_ROJO  | Centro: 205 | Muros: [I:70 D:250] | Vel: 190 | Angulo:  80 |
+[SIM] <250,86>
+[SIM] <220,83>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+[SIM] <220,88>
+[EVASION] Bloque VERDE detectado en 110. Forzando centro a 0
+[SIM] <190,98>
+| Estado: EVADIENDO_VERDE | Centro:  60 | Muros: [I:15 D:250] | Vel: 190 | Angulo:  98 |
+[SIM] <220,88>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:105 D:215] | Vel: 250 | Angulo:  86 |
+[SIM] <220,103>
+| Estado: MURO_FRONTAL    | Centro: 160 | Muros: [I:-1 D:-1] | Vel: 220 | Angulo: 103 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[EVASION] Bloque ROJO detectado en 205. Forzando centro a 315
+[SIM] <190,60>
+[SIM] <190,80>
+| Estado: EVADIENDO_ROJO  | Centro: 205 | Muros: [I:70 D:250] | Vel: 190 | Angulo:  80 |
+[SIM] <250,86>
+[SIM] <220,76>
+[SIM] <220,83>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+[SIM] <220,88>
+[EVASION] Bloque VERDE detectado en 110. Forzando centro a 0
+[SIM] <190,120>
+[SIM] <190,98>
+| Estado: EVADIENDO_VERDE | Centro:  60 | Muros: [I:15 D:250] | Vel: 190 | Angulo:  98 |
+[SIM] <220,88>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:105 D:215] | Vel: 250 | Angulo:  86 |
+[SIM] <220,103>
+| Estado: MURO_FRONTAL    | Centro: 160 | Muros: [I:-1 D:-1] | Vel: 220 | Angulo: 103 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[EVASION] Bloque ROJO detectado en 205. Forzando centro a 315
+[SIM] <190,60>
+[SIM] <190,80>
+| Estado: EVADIENDO_ROJO  | Centro: 205 | Muros: [I:70 D:250] | Vel: 190 | Angulo:  80 |
+[SIM] <250,86>
+[SIM] <220,83>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+[SIM] <220,88>
+[EVASION] Bloque VERDE detectado en 110. Forzando centro a 0
+[SIM] <190,98>
+| Estado: EVADIENDO_VERDE | Centro:  60 | Muros: [I:15 D:250] | Vel: 190 | Angulo:  98 |
+[SIM] <220,88>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:105 D:215] | Vel: 250 | Angulo:  86 |
+[SIM] <220,103>
+| Estado: MURO_FRONTAL    | Centro: 160 | Muros: [I:-1 D:-1] | Vel: 220 | Angulo: 103 |
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:70 D:250] | Vel: 250 | Angulo:  86 |
+[EVASION] Bloque ROJO detectado en 205. Forzando centro a 315
+[SIM] <190,60>
+[SIM] <190,80>
+| Estado: EVADIENDO_ROJO  | Centro: 205 | Muros: [I:70 D:250] | Vel: 190 | Angulo:  80 |
+[SIM] <250,86>
+[SIM] <220,83>
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+| Estado: CENTRADO        | Centro: 190 | Muros: [I:70 D:310] | Vel: 220 | Angulo:  83 |
+[SIM] <220,96>
+[SIM] <220,88>
+[EVASION] Bloque VERDE detectado en 110. Forzando centro a 0
+[SIM] <190,120>
+[SIM] <190,98>
+| Estado: EVADIENDO_VERDE | Centro:  60 | Muros: [I:15 D:250] | Vel: 190 | Angulo:  98 |
+[SIM] <220,76>
+[SIM] <220,88>
+[SIM] <250,86>
+| Estado: CENTRADO        | Centro: 160 | Muros: [I:105 D:215] | Vel: 250 | Angulo:  86 |
+
+[INFO] Vuelta 3/3 completada
+
+
+[INFO] Reto superado: deteniendo motores
+
+[SAFE STOP] Objetivo completado.
+[SIM] <0,86>
+(base) andresvillarreal@Andress-MacBook-Air Ingenieros-Paralelos-main-3 % 

@@ -1,0 +1,53 @@
+{
+  "video_path": "capturas_bot/run_20260610_174858.mp4",
+  "timestamps_path": "capturas_bot/run_20260610_174858.timestamps.csv",
+  "json_path": "capturas_bot/run_20260610_174858.json",
+  "width": 320,
+  "height": 240,
+  "fps": 30.0,
+  "started_at_epoch": 1781128138.1827302,
+  "started_at_local": "2026-06-10 17:48:58",
+  "markers": [
+    {
+      "frame_index": 30,
+      "elapsed_seconds": 3.152291,
+      "epoch_seconds": 1781128141.335021,
+      "label": "auto_front_wall",
+      "speed": 196,
+      "angle": 64
+    },
+    {
+      "frame_index": 53,
+      "elapsed_seconds": 4.558443,
+      "epoch_seconds": 1781128142.741173,
+      "label": "auto_front_wall",
+      "speed": 196,
+      "angle": 64
+    },
+    {
+      "frame_index": 100,
+      "elapsed_seconds": 7.581945,
+      "epoch_seconds": 1781128145.764675,
+      "label": "auto_front_wall",
+      "speed": 196,
+      "angle": 64
+    },
+    {
+      "frame_index": 100,
+      "elapsed_seconds": 7.631647,
+      "epoch_seconds": 1781128145.814378,
+      "label": "manual_error",
+      "speed": 196,
+      "angle": 64
+    }
+  ],
+  "frames_written": 107,
+  "duration_seconds": 8.227,
+  "last_checkpoint_epoch": 1781128146.4092517,
+  "last_checkpoint_local": "2026-06-10 17:49:06",
+  "finalized": true,
+  "initial_rear_distance_cm": 29.0,
+  "latest_rear_distance_cm": 147.91,
+  "ended_at_epoch": 1781128146.4092517,
+  "ended_at_local": "2026-06-10 17:49:06"
+}

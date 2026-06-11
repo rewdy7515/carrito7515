@@ -1,0 +1,374 @@
+# WRO2026 Future Engineers – Ingenieros Paralelos ## About us 👥 >Team members -
+Samuel Guaimacuto - Andrés Villareal - David Xu _We are a Venezuelan team
+conformed by Informatic Engineering students of Universidad Gran Mariscal de
+Ayacucho (UGMA), núcleo Barcelona, being our first time participating in a WRO
+competition, competing in the Future Engineers category. Our inspiration to be
+part of this tournament was the desire to learn about robotics' world, wanting
+to face this challenge in order to achieve it. We are grateful with all our
+family, professors and classmates, without their support it would not have been
+possible to achieve what we set out to do._ ## Vision Management 🖥️ - **Logitech
+C922 Web Camera**
+
+<table>
+  <tr>
+    <td align="center" width="300">
+      <img src="./resources/Logitech C922.png " alt="Logitech C922 Webcam" />
+    </td>
+    <td>
+      <h3>Specifications:</h3>
+      <ul>
+        <li>Max resolution: 1080p at 30fps (Full HD) or 720p at 60fps (HD)</li>
+        <li>Field of View (FoV): 78° diagonal</li>
+        <li>Focus Type: Autofocus</li>
+        <li>
+          Lens Technology: Full HD glass lens with automatic light correction
+        </li>
+        <li>Audio: Dual omnidirectional stereo microphones</li>
+        <li>Connectivity: Wired USB 2.0 (includes a 5-foot / 1.5m cable)</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+The Logitech C922 Pro Stream is a popular, high-definition webcam designed
+specifically for content creators, streamers, and professionals. It offers sharp
+video resolution, smooth frame rates for fluid motion, and a convenient
+low-light correction feature. In our project, we used it as the eye of the car,
+catching the view of the environment. - **Raspberry Pi 4**
+
+<table>
+  <tr>
+    <td align="center" width="300">
+      <img src="./resources/Raspberry Pi 4.png " alt="Raspberry Pi 4" />
+    </td>
+    <td>
+      <h3>Specifications:</h3>
+      <ul>
+        <li>
+          Processor: Quad-Core Cortex-A72 (ARM v8) 64-bit SoC @ 1.5–1.8 GHz
+        </li>
+        <li>Memory: 1GB, 2GB, 4GB, or 8GB LPDDR4-3200 SDRAM</li>
+        <li>Video: Dual micro-HDMI ports supporting 4K @ 60fps</li>
+        <li>
+          Connectivity: Gigabit Ethernet, 2.4/5.0 GHz Wi-Fi, and Bluetooth 5.0
+        </li>
+        <li>USB: 2x USB 3.0, 2x USB 2.0 ports</li>
+        <li>Power: USB-C (5V/3A) or Power over Ethernet (PoE) supported</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+The Raspberry Pi 4 Model B is a credit card-sized, single-board computer. It
+functions as a fully operational, low-cost computer capable of desktop
+computing, media streaming, home automation, and robotics, while using only a
+fraction of the power of a standard desktop. <b
+  >This piece of hardware acts as the brain of the car, with software capable to
+  process the view of the web camera, deciding which is the most appropriate
+  action to execute, according the scenery, to later let our microcontroller
+  perform it</b
+>.
+
+<hr />
+
+<h2>Software implemented in the Raspberry</h2>
+
+<img
+  src="./resources/OpenCV_Logo.png "
+  alt="OpenCV Logo"
+  height="100"
+  width="200"
+/>
+
+_Open Source Computer Vision Library is a massive, free, and open-source
+software library packed with tools for real-time computer vision, image
+processing, and machine learning. It is designed to act as the eyes of a system,
+allowing computers to read, analyze, and understand visual data like images and
+videos. Computers do not see images, they interpret them as huge numeric
+matrices of pixels.
+<b
+  >OpenCV provides functions to manipulate these numbers rapidly, that is the
+  reason why we applied this library, allowing the autonomous car to detect
+  colors, performing mathematical operations to achieve it</b
+>._
+
+<hr />
+
+## Mobility Management ⚙️ - **Arduino Uno**
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="./resources/Arduino_Uno.png " alt="Arduino Uno" width="300" />
+    </td>
+    <td>
+      <h3>Specifications:</h3>
+      <ul>
+        <li>Microcontroller: ATmega328P</li>
+        <li>Operating Voltage: 5V</li>
+        <li>Input Voltage (Recommended): 7V to 12V</li>
+        <li>Input Voltage (Limit): 6V to 20V</li>
+        <li>Digital I/O Pins: 14 (6 provide PWM output)</li>
+        <li>Analog Input Pins: 6</li>
+        <li>DC Current per I/O Pin: 20mA</li>
+        <li>Clock Speed: 16MHz</li>
+        <li>Flash Memory: 32KB (of which 0.5KB is used by the bootloader)</li>
+        <li>SRAM: 2KB</li>
+        <li>EEPROM: 1KB</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+The Arduino Uno is a beginner-friendly, open-source microcontroller board used
+for building digital devices and interactive projects. It acts as the brain of a
+project, allowing people to read inputs (like a sensor, button, or temperature
+reading) and turn them into outputs (like moving a motor or turning on an LED).
+Since it is our first time participating in this kind of tournaments, we decided
+to begin trying this model of Arduino.
+
+<hr />
+
+<h3>Arduino Code (C++)</h3>
+
+The Servo.h library is a built-in library for Arduino that allows people to
+easily control RC (hobby) servo motors. It simplifies the process by handling
+the precise pulse-width modulation (PWM) signals in the background, allowing
+your motor to rotate to specific angles (usually 0 to 180 degrees) or at
+continuous speeds.
+<b
+  >We employed this library to manage the angles of our servo motor, depending
+  the instruction to execute. When the microcontroller receives the decision
+  taken by the Raspberry, the Arduino's code checks the action it is going to
+  perform and how, sending small electric pulses to the driver</b
+>.
+
+<hr />
+
+- **L298N Driver**
+
+<table>
+  <tr>
+    <td align="center" width="300">
+      <img src="./resources/Driver_L298N.png " alt="Driver L298N" />
+    </td>
+    <td>
+      <h3>Specifications:</h3>
+      <ul>
+        <li>Driver IC: STMicroelectronics L298N</li>
+        <li>Motor Supply Voltage (Vs): 5V to 35V</li>
+        <li>Peak Output Current: 2A per channel (4A total max)</li>
+        <li>Logic Supply Voltage (Vss): 5V to 7V</li>
+        <li>Maximum Power Dissipation: 20W at 75°C</li>
+        <li>Control Signal Level: Low (-0.3V to 1.5V), High (2.3V to Vss)</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+The L298N is a dual H-Bridge motor driver module used to control the direction
+and speed of DC or stepper motors. It acts as a bridge between the
+microcontroller, the Arduino Uno, and high-power motors (in our case the servo
+motor and the encoder motor), supplying the necessary current and voltage. -
+**HC-SR04 Ultrasonic Sensors**
+
+<table>
+  <tr>
+    <td align="center" width="300">
+      <img
+        src="./resources/HC-SR04_Ultrasonic_Sensor.png "
+        alt="HC-SR04 Ultrasonic Sensor"
+      />
+    </td>
+    <td>
+      <h3>Specifications:</h3>
+      <ul>
+        <li>Measuring Range: 2 cm to 400 cm (about 1 inch to 13 feet)</li>
+        <li>Accuracy: ±3mm</li>
+        <li>Operating Frequency: 40kHz</li>
+        <li>Sensing Angle: 15° to 30° cone effect</li>
+        <li>
+          Operating Voltage: Typically 5V DC (though some newer variants like
+          the HC-SR04+ support 3.3V)
+        </li>
+        <li>Operating Current: ~15mA</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+The HC-SR04 is a widely used, budget-friendly ultrasonic sensor that measures
+distance by emitting high-frequency sound waves and calculating the time it
+takes for the echo to bounce back. It is a staple in robotics for obstacle
+avoidance and proximity sensing. - **Fischertechnik Maker Kit Car**
+
+<img
+  src="./resources/Fischertechnik_Maker_Kit_Car.png "
+  alt="Fischertechnik Maker Kit Car"
+  width="300px"
+/>
+
+The Fischertechnik Maker Kit Car is an advanced construction kit designed for
+makers, hobbyists, and robotic enthusiasts to build a highly customizable,
+mobile robotic vehicle chassis. Includes pieces for building sturdy structural
+superstructures and custom mounts, so we took advantage of this by using the
+blocks as the base or skeleton of our car to later assembly the other components
+around it.
+
+<h3>Other components the kit contains</h3>
+
+> Servomotor
+
+<a
+  href="schemes/Fistchertechnik Maker Kit Car/BA_DATENBLATT_MAKER_KIT_CAR_ENCODERMOTOR.pdf"
+  >Check specifications</a
+>
+
+Is a specialized motor designed to turn to a specific, exact angle (usually
+between 0° and 180°) and hold that position. It connects directly to the front
+steering knuckles of the chassis and it controls the steering mechanism. Unlike
+the drive motor, it is not programmed to spin continuously. Instead, you command
+it to change degrees, giving your robot precise navigation capabilities. >
+Encoder Motor or C Motor
+
+<a
+  href="schemes/Fistchertechnik Maker Kit Car/BA_DATENBLATT_MAKER_KIT_CAR_ENCODERMOTOR.pdf"
+  >Check specifications</a
+>
+
+Is the primary drive engine of the vehicle. It does not just spin; it counts its
+own rotations. It provides the driving power (traction) to move the car forward
+and backward. The built-in encoder sends digital pulses back to our controller,
+the Arduino Uno. This allows us to measure exactly how far the car has traveled,
+calculate its speed, and program precise movements. > Differential Gear Is a
+mechanical gearbox located between the two driven wheels. It allows the left and
+right wheels to rotate at different speeds while still receiving power from the
+motor. When the car turns, the outside wheel has to travel a longer distance
+than the inside wheel. Without a differential, the wheels would lock up, slip,
+or skid during turns. This component ensures smooth, realistic cornering and
+prevents our car from losing traction. ## Power Management 🔋 - **LX-2BUPS UPS**
+
+<table>
+  <tr>
+    <td align="center" width="300">
+      <img src="./resources/LX-2BUPS.png " alt="LX-2BUPS" />
+    </td>
+    <td>
+      <h3>Specifications:</h3>
+      <ul>
+        <li>Battery Type: Two parallel 18650 lithium-ion batteries (3.7V)</li>
+        <li>Output Voltage: Typically available in 5V, 9V, or 12V versions</li>
+        <li>Max Output Current: Up to 3A</li>
+        <li>Max Output Power: 15W to 24W</li>
+        <li>
+          Input Voltage: Standard DC 5V (via Micro USB or USB Type-C depending
+          on the board variant)
+        </li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+The LX-2BUPS is a popular DIY-style universal uninterruptible power supply (UPS)
+module. It runs on two parallel-connected 18650 lithium-ion batteries and
+provides seamless, zero-delay switching between mains power and battery backup,
+making it ideal for keeping low-power devices like internet routers and modems
+running during outages. We employed two pieces of this component, one of 5V to
+the Raspberry and another of 12V for the driver. - **Ultrafire TR 18650 9800mAh
+3.7V batteries**
+
+<table>
+  <tr>
+    <td align="center" width="300">
+      <img
+        src="./resources/Ultrafire_TR18650_9800mAh_3.7V.png "
+        alt="Ultrafire TR 18650 9800mAh 3.7V"
+      />
+    </td>
+    <td>
+      <h3>Specifications:</h3>
+      <ul>
+        <li>Form Factor: Standard 18650 cylindrical cell.</li>
+        <li>Diameter: 18 mm.</li>
+        <li>
+          Length: 65 mm (can reach up to 68mm if it includes a button-top or an
+          unlisted protection circuit).
+        </li>
+        <li>Chemistry: Lithium-ion (Li-ion).</li>
+        <li>Terminal Type: Flat top or Button top (varies by distributor).</li>
+        <li>
+          Nominal Voltage: 3.7V advertised (Standard Li-ion curve: 4.2V fully
+          charged, ~2.75V cut-off).
+        </li>
+        <li>Stated Capacity: 9800 mAh.</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+In the project we used four of these batteries, two for each UPS. - **Micro
+Protoboard**
+
+<table>
+  <tr>
+    <td align="center" width="300">
+      <img src="./resources/Micro_Protoboard.png " alt="Micro Protoboard" />
+    </td>
+    <td>
+      <h3>Specifications:</h3>
+      <ul>
+        <li>
+          Grid/Pitch: Standard 2.54mm (0.1") spacing to perfectly fit
+          traditional through-hole components (like microcontrollers, ICs, and
+          resistors).
+        </li>
+        <li>
+          Dimensions: Typically ranges from 2cm x 8cm up to 5cm x 7cm, with many
+          being snappable to exact custom sizes.
+        </li>
+        <li>
+          Material: FR-4 fiberglass commonly, which is heat-resistant for
+          soldering, or flexible Bakelite.
+        </li>
+        <li>
+          Hole Diameter: Standard 1.0mm drill holes to accommodate component
+          leads and jumper wires easily.
+        </li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+A micro protoboard (or mini protoboard/perfboard) is a tiny, physical
+prototyping board used in electronics to transition a temporary breadboard
+circuit into a permanent, soldered one. It features a matrix of pre-drilled,
+copper-clad holes for point-to-point wiring and soldering components. ##
+Components abstract | Component | Cantidad | Precio/Unidad ($) | Total ($) |
+|--------------------------------------|----------|-------------------|-------------|
+| **Raspberry Pi 4** | 1 | **21.42** | **21.42** | | **L298N Driver** | 1 |
+**22.45** | **22.45** | | **Arduino Uno** | 1 | **19.92** | **19.92** | |
+**HC-SR04 Ultrasonic Sensors** | 4 | **4.05** | **4.05** | | **Micro
+Protoboard** | 1 | **80.00** | **80.00** | | **Fischertechnik Maker Kit Car** |
+1 | **135.00** | **8.50** | | **Logitech C922 Web Camera** | 1 | **8.50** |
+**8.50** | | **LX-2BUPS UPS** | 2 | **8.50** | **8.50** | | **Ultrafire Lithium
+batteries** | 4 | **9.00** | **36.00** | | **Micro Protoboard** | 1 | **80.00**
+| **80.00** | ## Obstacle Management // Explain the function of every component
+in the challenges Nuestro objetivo es crear un carro autónomo con la capacidad
+de superar las carreras de la competición en la categoría Futuros Ingenieros. 1)
+Desafío Abierto (Open Challenge): El vehículo autónomo debe completar 3 vueltas
+en un circuito donde las paredes interiores cambian de posición de forma
+aleatoria en cada ronda. 2) Desafío de Obstáculos (Obstacle Challenge): El
+vehículo debe completar 3 vueltas en una pista con obstáculos (postes rojos y
+verdes) colocados aleatoriamente. Los postes indican el lado del carril por el
+que debe pasar el coche sin derribarlos, finalizando con un estacionamiento en
+paralelo. Esta librería se tomó en cuenta para nuestro proyecto con el fin de la
+identificación de colores para realizar acciones específicas: > [!IMPORTANT] >
+Colors >- Rojo: Esquivar obstáculo por la derecha. >- Verde: Esquivar obstáculo
+por la izquierda. >- Magenta: Estacionamiento. >- Naranja: Indicar giro a la
+derecha. >- Azul: Indicar giro a la izquierda. El código escrito en el lenguaje
+Python envía strings conformados por dos caractares para posteriormente ser
+procesados en el Arduino, pudiendo estas cadenas variar dependiendo de lo
+detectado en la cámara y el gestionamiento de dicha información por Mediapipe
+junto a OpenCV: - Dirección: F(recto), I(izquierda), D(derecha), 1(giro leve
+izquierda), 2(giro leve dereche), S(parar). - Potencia: H(alta/255),
+M(media/195), L(baja/115).

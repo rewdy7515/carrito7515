@@ -1,0 +1,261 @@
+{
+  "video_path": "capturas_bot/run_20260610_150218.mp4",
+  "timestamps_path": "capturas_bot/run_20260610_150218.timestamps.csv",
+  "json_path": "capturas_bot/run_20260610_150218.json",
+  "width": 320,
+  "height": 240,
+  "fps": 30.0,
+  "started_at_epoch": 1781118138.0789564,
+  "started_at_local": "2026-06-10 15:02:18",
+  "markers": [
+    {
+      "frame_index": 24,
+      "elapsed_seconds": 2.313458,
+      "epoch_seconds": 1781118140.392415,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 49,
+      "elapsed_seconds": 3.727739,
+      "epoch_seconds": 1781118141.806695,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 66,
+      "elapsed_seconds": 4.663808,
+      "epoch_seconds": 1781118142.742764,
+      "label": "auto_curve_too_long",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 91,
+      "elapsed_seconds": 6.333772,
+      "epoch_seconds": 1781118144.412729,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 120,
+      "elapsed_seconds": 8.154015,
+      "epoch_seconds": 1781118146.232971,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 152,
+      "elapsed_seconds": 10.049304,
+      "epoch_seconds": 1781118148.12826,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 180,
+      "elapsed_seconds": 11.460389,
+      "epoch_seconds": 1781118149.539345,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 198,
+      "elapsed_seconds": 12.315589,
+      "epoch_seconds": 1781118150.394546,
+      "label": "auto_curve_too_long",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 230,
+      "elapsed_seconds": 14.266457,
+      "epoch_seconds": 1781118152.345413,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 256,
+      "elapsed_seconds": 15.67562,
+      "epoch_seconds": 1781118153.754576,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 294,
+      "elapsed_seconds": 17.987083,
+      "epoch_seconds": 1781118156.06604,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 319,
+      "elapsed_seconds": 19.409788,
+      "epoch_seconds": 1781118157.488744,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 334,
+      "elapsed_seconds": 20.264923,
+      "epoch_seconds": 1781118158.343879,
+      "label": "auto_curve_too_long",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 362,
+      "elapsed_seconds": 22.090719,
+      "epoch_seconds": 1781118160.169676,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 386,
+      "elapsed_seconds": 23.541735,
+      "epoch_seconds": 1781118161.620691,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 428,
+      "elapsed_seconds": 26.179199,
+      "epoch_seconds": 1781118164.258156,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 457,
+      "elapsed_seconds": 27.590463,
+      "epoch_seconds": 1781118165.669419,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 467,
+      "elapsed_seconds": 28.108624,
+      "epoch_seconds": 1781118166.18758,
+      "label": "auto_curve_too_long",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 502,
+      "elapsed_seconds": 30.237459,
+      "epoch_seconds": 1781118168.316416,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 526,
+      "elapsed_seconds": 31.6849,
+      "epoch_seconds": 1781118169.763856,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 564,
+      "elapsed_seconds": 34.148831,
+      "epoch_seconds": 1781118172.227788,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 590,
+      "elapsed_seconds": 35.599057,
+      "epoch_seconds": 1781118173.678013,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 606,
+      "elapsed_seconds": 36.439978,
+      "epoch_seconds": 1781118174.518935,
+      "label": "auto_curve_too_long",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 635,
+      "elapsed_seconds": 38.268183,
+      "epoch_seconds": 1781118176.347139,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 658,
+      "elapsed_seconds": 39.677977,
+      "epoch_seconds": 1781118177.756933,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 698,
+      "elapsed_seconds": 42.199556,
+      "epoch_seconds": 1781118180.278512,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 725,
+      "elapsed_seconds": 43.633254,
+      "epoch_seconds": 1781118181.71221,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 741,
+      "elapsed_seconds": 44.49454,
+      "epoch_seconds": 1781118182.573497,
+      "label": "auto_curve_too_long",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 775,
+      "elapsed_seconds": 46.670008,
+      "epoch_seconds": 1781118184.748964,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    },
+    {
+      "frame_index": 799,
+      "elapsed_seconds": 48.080471,
+      "epoch_seconds": 1781118186.159428,
+      "label": "auto_front_wall",
+      "speed": 172,
+      "angle": 70
+    }
+  ],
+  "frames_written": 829,
+  "duration_seconds": 50.305,
+  "last_checkpoint_epoch": 1781118188.3836899,
+  "last_checkpoint_local": "2026-06-10 15:03:08",
+  "finalized": true,
+  "initial_rear_distance_cm": 107.0,
+  "latest_rear_distance_cm": 188.78,
+  "ended_at_epoch": 1781118188.3836899,
+  "ended_at_local": "2026-06-10 15:03:08"
+}
