@@ -9,12 +9,12 @@ const int pinMotorPWM = 7;
 const int pinMotorDir1 = 9; // Motor IN1
 const int pinMotorDir2 = 10; // Motor IN2
 
-// Único Ultrasonido Funcional (Estacionamiento)
+// Sensor de distancia funcional para estacionamiento
 const int pinTrig = 3;
 const int pinEcho = 11;
 
 // ================= VARIABLES =================
-int distanciaUS = 200; 
+int distanciaSensor = 200; 
 const byte numChars = 32;
 char receivedChars[numChars];
 char tempChars[numChars];
@@ -22,7 +22,7 @@ boolean newData = false;
 
 int velocidadAuto = 0;
 int anguloServo = 86;
-unsigned long previousMillisUS = 0;
+unsigned long previousMillisSensor = 0;
 
 void setup() {
     Serial.begin(115200);
@@ -46,11 +46,11 @@ void loop() {
     }
     
     unsigned long currentMillis = millis();
-    if (currentMillis - previousMillisUS >= 50) {
-        previousMillisUS = currentMillis;
-        leerUltrasonido();
-        Serial.print("US:");
-        Serial.println(distanciaUS);
+    if (currentMillis - previousMillisSensor >= 50) {
+        previousMillisSensor = currentMillis;
+        leerDistancia();
+        Serial.print("DIST:");
+        Serial.println(distanciaSensor);
     }
 }
 
@@ -114,7 +114,7 @@ void ejecutarMovimiento() {
     }
 }
 
-void leerUltrasonido() {
+void leerDistancia() {
     digitalWrite(pinTrig, LOW);
     delayMicroseconds(2);
     digitalWrite(pinTrig, HIGH);
@@ -123,8 +123,8 @@ void leerUltrasonido() {
     
     long duration = pulseIn(pinEcho, HIGH, 12000); 
     if (duration == 0) {
-        distanciaUS = 200; 
+        distanciaSensor = 200; 
     } else {
-        distanciaUS = duration * 0.034 / 2;
+        distanciaSensor = duration * 0.034 / 2;
     }
 }

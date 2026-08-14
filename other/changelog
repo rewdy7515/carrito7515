@@ -1,0 +1,11 @@
+A change log to document all changes made to the principal code
+
+1.1:
+  -#- Separation of modes into separate, dedicated files for each one.
+  -#- Elimination of the PID system and all functions derived from it.
+  -#- Code simplification and transition to a bang-bang control method for the first method.
+  -#- upgrade to a Dead Reckoning method for the implementation of the second mode.
+
+1.1.1:
+  -#- New instructions for the second mode 
+  -#- Minor adjustments for improved performance in the second mode

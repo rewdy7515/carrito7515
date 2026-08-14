@@ -1,0 +1,12 @@
+[Unit]
+Description=Start Script
+After=multi-user.target
+
+[Service]
+Type=idle
+User=samuelg
+WorkingDirectory=/home/samuelg/Desktop
+ExecStart=/usr/bin/python3 /home/samuelg/Desktop/Main0.1
+
+[Install]
+WantedBy=multi-user.target

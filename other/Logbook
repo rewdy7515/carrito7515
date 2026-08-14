@@ -1,0 +1,22 @@
+log
+
+this a logbook to document all the process realized day by day in this proyect
+
+--pos 1st competition--
+#day 1#
+  After observing flaws in the competition and experiencing the dynamics firsthand, it was decided to implement corrections and modularize the code to achieve a more reliable and secure strategy. 
+  One of the initial issues identified was a "blind spot" when starting too close to the front wall; because the robot was positioned so close to the inner wall, 
+  its field of view and the logic used to determine direction caused it to consistently choose the wrong path—specifically, the opposite of the correct one. 
+  To correct this the original code was first split into two separate files—separating Mode 1 from Mode 2—resulting in better performance and a more manageable workflow. 
+  To fix errors identified in Mode 1, the structure was overhauled to minimize complexity, streamlining the code as much as possible while ensuring reliability. 
+  The PID controller and its associated components were removed in favor of a Bang-Bang (or on/off) control methodology, which had proven most effective for our robot during the previous competition; 
+  this approach allowed us to complete the first challenge more consistently and with a more easily adjustable configuration. For Mode 2, we are implementing Dead Reckoning navigation, 
+  which offers far greater consistency than what we achieved during the last competition; however, given that this method is susceptible to drift or timing offsets, 
+  its final implementation is being evaluated ahead of the upcoming competition.
+
+#day 2#
+  We didn't find any major flaws in the code used so far. New commands were added to the code for the second mode to create a code base that can then be modified as needed on the day of the competition, 
+  The car has responded correctly in most of the tests.
+
+#day 3#
+  
