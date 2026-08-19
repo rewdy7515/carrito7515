@@ -19,6 +19,17 @@ Este inventario reúne lo que aparece en `README.md`, `resources/`, los datashee
 
 La cifra de las baterías debe registrarse como **9800 mAh anunciados, capacidad real sin verificar**. No debe tratarse como capacidad medida.
 
+## Especificación declarada de la cámara
+
+La Logitech C922 Pro Stream Webcam registra video a **1080p/30 fps** o
+**720p/60 fps**. Su campo de visión declarado es **78° diagonal**, cuenta con
+autofocus y corrección automática para baja iluminación. Esta especificación
+fue proporcionada por el equipo; no reemplaza la calibración del montaje real.
+
+Como ambas resoluciones son 16:9, el simulador deriva un FOV horizontal inicial
+de **70.4°** a partir de los 78° diagonales. Debe ajustarse si las mediciones
+con la cámara montada difieren.
+
 ## Construcción observada
 
 Las seis fotografías muestran un chasis rojo de Fischertechnik con cuatro ruedas, una Raspberry Pi montada en la parte superior, Arduino y módulos electrónicos sujetos al chasis, cámara Logitech C922 en la zona frontal, sensor ultrasónico frontal, cableado expuesto y elementos de alimentación sujetos con bridas. Las fotos sirven para describir disposición general, no para deducir cada conexión.
@@ -30,9 +41,13 @@ Estas medidas fueron proporcionadas por el usuario y todavía deben verificarse 
 | Medida | Valor | Estado |
 |---|---:|---|
 | Distancia entre extremos delantero y trasero | 21.15 cm | Documentada por el usuario |
-| Distancia entre centro de rueda trasera y delantera | 14.8 cm | Documentada por el usuario |
-| Diámetro de las ruedas | 6.3 cm | Documentada por el usuario |
-| Distancia entre centros de las ruedas delanteras | 14.6 cm | Documentada por el usuario |
+| Distancia entre ejes delantero y trasero (`wheelbase`) | 15.0 cm | Documentada por el usuario |
+| Diámetro de las ruedas | 6.8 cm | Documentada por el usuario |
+| Ancho de cada rueda | 2.3 cm | Documentada por el usuario |
+| Distancia entre centros de las ruedas delanteras | 14.9 cm | Documentada por el usuario |
+| Envolvente lateral de ruedas (derivada) | 17.2 cm | 14.9 cm entre centros + 2.3 cm de rueda; medir carrocería si sobresale |
+| Radio de giro a la derecha | 32.2 cm | Documentada por el usuario; usada como radio del modelo de bicicleta |
+| Radio de giro a la izquierda | 43.0 cm | Documentada por el usuario; usada como radio del modelo de bicicleta |
 | Ángulo vertical de la cámara | Ajustable | Documentado por el usuario; valor pendiente |
 
-El archivo `src/physical_setup.py` permite registrar estas medidas, el centro provisional del servo y sus límites de prueba sin conectarse al hardware.
+El archivo `software/raspberry_pi/src/physical_setup.py` permite registrar estas medidas, la evidencia por rueda de la dirección, el centro provisional del servo y sus límites de prueba sin conectarse al hardware.

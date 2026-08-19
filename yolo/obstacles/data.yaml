@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 3
+names: ['green', 'magenta', 'red']
+
+roboflow:
+  workspace: izmir-ye64n
+  project: obstacles-b16ad
+  version: 1
+  license: Public Domain
+  url: https://universe.roboflow.com/izmir-ye64n/obstacles-b16ad/dataset/1

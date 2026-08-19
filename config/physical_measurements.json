@@ -1,0 +1,66 @@
+{
+  "units": {
+    "distance": "cm",
+    "angle": "degrees"
+  },
+  "measurements": {
+    "overall_front_to_rear_cm": 21.15,
+    "wheelbase_cm": 15.0,
+    "front_wheel_center_track_cm": 14.9,
+    "wheel_width_cm": 2.3,
+    "wheel_diameter_cm": 6.8,
+    "wheel_outer_envelope_width_cm": 17.2,
+    "turn_radius_right_cm": 32.2,
+    "turn_radius_left_cm": 43.0,
+    "camera_vertical_angle_deg": null,
+    "servo_center_deg": 92.0,
+    "servo_logical_center_deg": 92.0,
+    "servo_offset_deg": 0.0,
+    "servo_safe_min_deg": 60.0,
+    "servo_safe_max_deg": 120.0,
+    "camera_height_cm": 8.8
+  },
+  "steering_measurements": {
+    "reference_servo_deg": 90.0,
+    "description": "Ángulos de cada rueda delantera respecto a la recta observada con el servo en 90°. No se reducen a un único ángulo de bicicleta hasta medir el radio real del carro.",
+    "wheel_angles_deg": [
+      {
+        "servo_command_deg": 60.0,
+        "turn": "right",
+        "left_wheel_deg": 22.75,
+        "right_wheel_deg": 27.97
+      },
+      {
+        "servo_command_deg": 120.0,
+        "turn": "left",
+        "left_wheel_deg": 21.45,
+        "right_wheel_deg": 17.58
+      }
+    ],
+    "front_wheel_tip_lateral_displacements_cm": [
+      {
+        "servo_command_deg": 140.0,
+        "left_wheel_cm": 2.4,
+        "right_wheel_cm": 3.9
+      },
+      {
+        "servo_command_deg": 50.0,
+        "left_wheel_cm": 2.3,
+        "right_wheel_cm": 2.2
+      }
+    ]
+  },
+  "vision": {
+    "safe_distance_mm": 340,
+    "safe_zone_top_ratio": 0.68,
+    "notes": "La franja verde es provisional; calibrar con la cámara instalada."
+  },
+  "notes": [
+    "Las medidas fueron proporcionadas por el usuario y deben verificarse físicamente.",
+    "La envolvente lateral de ruedas (17.2 cm) se deriva de 14.9 cm entre centros más 2.3 cm de ancho de rueda; no sustituye una medición de la carrocería si esta sobresale.",
+    "Los radios de giro medidos son 32.2 cm a la derecha y 43.0 cm a la izquierda; el modelo de bicicleta usa límites direccionales derivados de ellos.",
+    "El ángulo vertical de la cámara es ajustable y no tiene aún un valor definitivo.",
+    "El centro físico recto y el centro lógico verificados son 92 grados; 86 grados queda como medición histórica.",
+    "La capacidad real de las baterías permanece sin verificar."
+  ]
+}

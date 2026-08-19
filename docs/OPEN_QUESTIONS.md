@@ -20,7 +20,7 @@ Estas preguntas requieren inspección, medición o confirmación del equipo. Has
 ## Actuadores y sensores
 
 - ¿Cuál es el rango mecánico seguro del servo?
-- ¿Cuál es el centro real de dirección, comparado con el valor provisional de 86°?
+- Centro real de dirección verificado: 92° lógico y físico; falta validar su repetibilidad bajo carga.
 - ¿Cuál es el sentido del motor para cada combinación de IN1/IN2?
 - ¿El L298N controla únicamente el motor de tracción? ¿Dónde están conectadas sus salidas?
 - ¿Dónde está ubicado y hacia dónde apunta exactamente el HC-SR04?
@@ -30,8 +30,8 @@ Estas preguntas requieren inspección, medición o confirmación del equipo. Has
 ## Mecánica
 
 - ¿Cuáles son las dimensiones del vehículo?
-- ¿Cuál es la distancia entre ejes?
-- ¿Cuál es el ancho de vía?
+- La distancia entre ejes se registró como 15.0 cm; falta repetirla si cambia el montaje.
+- El ancho de vía delantero se registró como 14.9 cm entre centros; falta medir la carrocería si sobresale de la envolvente de ruedas de 17.2 cm.
 - ¿Qué piezas exactas del Fischertechnik Maker Kit Car forman la transmisión y el diferencial?
 - ¿Qué parte del motor con encoder se puede usar para medir movimiento una vez integrados sus pines?
 
@@ -42,4 +42,3 @@ Estas preguntas requieren inspección, medición o confirmación del equipo. Has
 - ¿Cuál será el puerto serial real en la Raspberry Pi?
 - ¿Qué sistema operativo, versión de Python y dependencias estarán instalados?
 - ¿Qué interfaz documentada y validada se usará para que Python comunique comandos al firmware?
-

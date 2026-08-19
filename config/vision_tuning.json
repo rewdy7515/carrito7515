@@ -1,0 +1,35 @@
+{
+  "safe_distance_mm": 200,
+  "safe_zone_top_ratio": 0.68,
+  "traffic_sign_minimum_area": 250,
+  "traffic_sign_top_ratio": 0.32,
+  "traffic_sign_bottom_ratio": 0.92,
+  "black_wall_threshold": 65,
+  "colors": {
+    "red": {
+      "hue_tolerance": 10,
+      "minimum_saturation": 80,
+      "minimum_value": 80
+    },
+    "green": {
+      "hue_tolerance": 35,
+      "minimum_saturation": 20,
+      "minimum_value": 15
+    },
+    "blue": {
+      "hue_tolerance": 18,
+      "minimum_saturation": 60,
+      "minimum_value": 50
+    },
+    "orange": {
+      "hue_tolerance": 15,
+      "minimum_saturation": 70,
+      "minimum_value": 50
+    },
+    "magenta": {
+      "hue_tolerance": 15,
+      "minimum_saturation": 80,
+      "minimum_value": 70
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "_comments": {
+    "fixed_speed_cm_s": "Velocidad objetivo única de avance del recorrido en cm/s. No cambia entre fases.",
+    "max_steering_deg": "Ángulo máximo REAL de las ruedas en grados. Debe proceder de la calibración del sample, no del comando del servo.",
+    "safety_margins": "Margenes geometricos separados por frente, lateral y parte trasera.",
+    "hard_front_cm": "Margen minimo obligatorio delante del carro.",
+    "hard_side_cm": "Margen minimo obligatorio a cada lado del carro.",
+    "hard_rear_cm": "Margen minimo obligatorio detras del carro.",
+    "preferred_front_cm": "Margen preferido delante del carro para puntuar trayectorias.",
+    "preferred_side_cm": "Margen preferido lateral para puntuar trayectorias.",
+    "preferred_rear_cm": "Margen preferido detras del carro para puntuar trayectorias.",
+    "simulation_dt_s": "Paso de integración física del modelo de bicicleta en segundos.",
+    "replanning_period_s": "Cada cuánto se vuelve a calcular la trayectoria, independiente de simulation_dt_s.",
+    "planning_horizon_s": "Duración en segundos que se valida geométricamente antes de aceptar un candidato.",
+    "preview_horizon_s": "Duración visual de las líneas dibujadas. Puede ser mayor, pero no sustituye la validación.",
+    "memory_timeout_s": "Tiempo durante el que se conserva un obstáculo temporalmente perdido si no es el objetivo activo.",
+    "max_candidates": "Máximo de secuencias de giro evaluadas por ciclo.",
+    "max_planning_time_ms": "Presupuesto máximo de cálculo por ciclo en milisegundos.",
+    "max_steering_rate_deg_s": "Velocidad máxima de cambio del ángulo de ruedas en grados por segundo.",
+    "max_acceleration_cm_s2": "Aceleración máxima permitida en cm/s².",
+    "max_deceleration_cm_s2": "Desaceleración máxima permitida en cm/s².",
+    "turn_angles_deg": "Magnitudes candidatas del giro inicial TURN_OUT, además del ángulo calculado geométricamente.",
+    "counter_steer_angles_deg": "Magnitudes candidatas del contragiro COUNTER_STEER.",
+    "phase_transitions": "Las fases terminan por condiciones geometricas, nunca por duraciones base."
+  },
+  "fixed_speed_cm_s": 24.0,
+  "safety_margins": {
+    "hard": {
+      "front_cm": 6.0,
+      "side_cm": 3.0,
+      "rear_cm": 3.0
+    },
+    "preferred": {
+      "front_cm": 12.0,
+      "side_cm": 5.0,
+      "rear_cm": 5.0
+    }
+  },
+  "simulation_dt_s": 0.05,
+  "replanning_period_s": 0.2,
+  "planning_horizon_s": 2.0,
+  "preview_horizon_s": 5.0,
+  "memory_timeout_s": 2.0,
+  "max_candidates": 256,
+  "max_planning_time_ms": 20.0,
+  "max_steering_rate_deg_s": 90.0,
+  "max_acceleration_cm_s2": 45.0,
+  "max_deceleration_cm_s2": 70.0,
+  "turn_angles_deg": [15.0, 10.0, 5.0, 0.0],
+  "counter_steer_angles_deg": [15.0, 10.0, 5.0, 0.0]
+}

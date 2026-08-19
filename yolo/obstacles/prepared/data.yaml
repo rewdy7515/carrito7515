@@ -1,0 +1,7 @@
+path: /Users/andresvillarreal/Documents/carrito7515/yolo/obstacles/prepared
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: obstacle
+  1: parking_wall

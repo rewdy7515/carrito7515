@@ -1,0 +1,21 @@
+description: Ultralytics YOLO26n model trained on /Users/andresvillarreal/Documents/carrito7515/yolo/obstacles/prepared/data.yaml
+author: Ultralytics
+date: '2026-08-18T21:31:34.972518-04:00'
+version: 8.4.121
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+head: Detect
+batch: 1
+imgsz:
+- 256
+- 256
+names:
+  0: obstacle
+  1: parking_wall
+args:
+  batch: 1
+  quantize: null
+channels: 3
+end2end: false

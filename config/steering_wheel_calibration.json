@@ -1,0 +1,91 @@
+{
+  "units": {
+    "angle": "degrees"
+  },
+  "purpose": "Measured mapping from real wheel angle to logical servo command. Do not extrapolate.",
+  "pairs": [
+    {
+      "wheel_angle_deg": -19.86,
+      "servo_command_deg": 120.0,
+      "direction": "left",
+      "source": "Verified physical measurement reported by team."
+    },
+    {
+      "wheel_angle_deg": -17.69,
+      "servo_command_deg": 115.0,
+      "direction": "left",
+      "source": "Verified physical measurement reported by team."
+    },
+    {
+      "wheel_angle_deg": -6.59,
+      "servo_command_deg": 105.0,
+      "direction": "left",
+      "source": "Verified physical measurement reported by team."
+    },
+    {
+      "wheel_angle_deg": 0.0,
+      "servo_command_deg": 92.0,
+      "source": "Latest verified physical test: command 92° leaves wheels straight."
+    },
+    {
+      "wheel_angle_deg": 14.1,
+      "servo_command_deg": 70.0,
+      "direction": "right",
+      "source": "Verified physical measurement reported by team."
+    },
+    {
+      "wheel_angle_deg": 20.7,
+      "servo_command_deg": 50.0,
+      "direction": "right",
+      "source": "Verified physical measurement reported by team."
+    }
+  ],
+  "observations": [
+    {
+      "servo_command_deg": 90.0,
+      "wheel_angle_deg": 0.0,
+      "direction": "straight",
+      "source": "Earlier observation; superseded by the latest verified center 92°."
+    }
+  ],
+  "per_wheel_measurements": {
+    "reference_servo_command_deg": 90.0,
+    "description": "Medidas respecto a la perpendicular de las ruedas rectas con servo en 90°. Se guardan por rueda porque no deben convertirse a un único ángulo equivalente sin una medición de radio de giro del vehículo.",
+    "wheel_angles_deg": [
+      {
+        "servo_command_deg": 60.0,
+        "turn": "right",
+        "left_wheel_deg": 22.75,
+        "right_wheel_deg": 27.97,
+        "source": "Physical measurement reported by team."
+      },
+      {
+        "servo_command_deg": 120.0,
+        "turn": "left",
+        "left_wheel_deg": 21.45,
+        "right_wheel_deg": 17.58,
+        "source": "Physical measurement reported by team."
+      }
+    ],
+    "front_wheel_tip_lateral_displacements_cm": [
+      {
+        "servo_command_deg": 140.0,
+        "left_wheel_cm": 2.4,
+        "right_wheel_cm": 3.9,
+        "source": "Physical measurement reported by team."
+      },
+      {
+        "servo_command_deg": 50.0,
+        "left_wheel_cm": 2.3,
+        "right_wheel_cm": 2.2,
+        "source": "Physical measurement reported by team."
+      }
+    ],
+    "turn_radius_cm": {
+      "right": 32.2,
+      "left": 43.0,
+      "source": "Physical measurement reported by team; radius is referenced to the vehicle path used by the bicycle model."
+    }
+  },
+  "pending": "Repetir el centro recto bajo carga si se usará 90° en vez de 92°."
+}
