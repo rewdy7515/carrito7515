@@ -1,0 +1,54 @@
+{
+  "mode": "2",
+  "scenarios": 10,
+  "seed": 20260815,
+  "duration_s": 180.0,
+  "fixed_speed_cm_s": 18.0,
+  "planning_budget_mode": "candidate_count",
+  "simulation_dt_s": 0.05,
+  "disable_safety_margins": true,
+  "replanning_period_s": 0.2,
+  "sensor": {
+    "noise_position_cm": 0,
+    "noise_heading_deg": 0,
+    "latency_s": 0,
+    "dropout_probability": 0
+  },
+  "planner_config": null,
+  "tuning": {
+    "fixed_speed_cm_s": 18.0,
+    "max_steering_deg": 24.97791676335524,
+    "safety_margins": {
+      "hard_front_cm": 0.0,
+      "hard_side_cm": 0.0,
+      "hard_rear_cm": 0.0,
+      "preferred_front_cm": 0.0,
+      "preferred_side_cm": 0.0,
+      "preferred_rear_cm": 0.0
+    },
+    "simulation_dt_s": 0.05,
+    "replanning_period_s": 0.2,
+    "planning_horizon_s": 2.0,
+    "preview_horizon_s": 5.0,
+    "memory_timeout_s": 2.0,
+    "max_candidates": 256,
+    "planning_budget_mode": "time",
+    "max_planning_time_ms": 20.0,
+    "max_steering_rate_deg_s": 90.0,
+    "max_acceleration_cm_s2": 45.0,
+    "max_deceleration_cm_s2": 70.0,
+    "turn_angles_deg": [
+      15.0,
+      10.0,
+      5.0,
+      0.0
+    ],
+    "counter_steer_angles_deg": [
+      15.0,
+      10.0,
+      5.0,
+      0.0
+    ],
+    "allow_physical_collisions": true
+  }
+}

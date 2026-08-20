@@ -10,6 +10,7 @@ import argparse
 import csv
 import json
 import math
+import random
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,12 +49,14 @@ except ImportError:
 
 try:
     from planner_rules import FIXED_RULES
-    from planner_tuning import PlannerTuning, load_planner_tuning
-    from scenario import default_scenario
+    from planner_tuning import PlannerTuning, PreferredSafetyMargins, load_planner_tuning
+    from scenario import Scenario, default_scenario, generate_scenario
+    from local_frame import LocalSide, footprint_side, get_local_side
 except ImportError:
     from simulator.planner_rules import FIXED_RULES
-    from simulator.planner_tuning import PlannerTuning, load_planner_tuning
-    from simulator.scenario import default_scenario
+    from simulator.planner_tuning import PlannerTuning, PreferredSafetyMargins, load_planner_tuning
+    from simulator.scenario import Scenario, default_scenario, generate_scenario
+    from simulator.local_frame import LocalSide, footprint_side, get_local_side
 
 try:
     from track_config import (
@@ -98,9 +101,6 @@ GUIDE_STROKE_CM = 0.3
 DEFAULT_MAX_STEERING_DEG = FIXED_RULES.maximum_physical_steering_deg
 AUTONOMOUS_TURN_REFERENCE_DEG = FIXED_RULES.maximum_physical_steering_deg
 AUTONOMOUS_TURN_REFERENCE_SAMPLE = 5
-LINE_TURN_DURATION_S = 3.0
-LINE_TURN_COOLDOWN_S = 1.25
-LINE_ALIGNMENT_TOLERANCE_DEG = 8.0
 SERVO_LOGICAL_CENTER_DEG = FIXED_RULES.servo_logical_center_deg
 SERVO_SAFE_MIN_DEG = FIXED_RULES.servo_safe_min_deg
 SERVO_SAFE_MAX_DEG = FIXED_RULES.servo_safe_max_deg
@@ -112,6 +112,7 @@ PANEL_WIDTH = 360
 WINDOW_SIZE = (int(TRACK_CM * SCALE) + PANEL_WIDTH, int(TRACK_CM * SCALE))
 CALIBRATION_FILE = Path(__file__).resolve().parents[1] / "config" / "simulator_steering_calibration.json"
 MANUAL_RUNS_DIR = Path(__file__).resolve().parents[1] / "config" / "simulator_manual_runs"
+DECISION_PROBE_DIR = Path(__file__).resolve().parent / "planner_tests" / "decision_probe"
 REFERENCE_ROUTE_SAMPLE = 10
 
 # Centros (cm) transcritos del plano de la pista aportado por el equipo.
@@ -156,6 +157,11 @@ class Obstacle:
     y: float
     color: str
     passed: bool = False
+    ever_detected: bool = False
+    pass_side_correct: bool | None = None
+    pass_count: int = 0
+    closest_approach_distance_cm: float = math.inf
+    closest_approach_side: LocalSide | None = None
 
 
 @dataclass
@@ -259,8 +265,7 @@ def detect_first_line(vehicle: Vehicle, detection_distance_cm: float = 12.0) -> 
     return color if distance <= detection_distance_cm else None
 
 
-def has_collision(vehicle: Vehicle, obstacles: list[Obstacle],
-                  ignored_obstacles: set[int] | None = None) -> bool:
+def has_collision(vehicle: Vehicle, obstacles: list[Obstacle]) -> bool:
     body = VehicleGeometry().footprint(
         VehicleState(vehicle.x, vehicle.y, vehicle.heading, vehicle.speed_cm_s, 0.0, vehicle.steering_deg)
     )
@@ -271,21 +276,15 @@ def has_collision(vehicle: Vehicle, obstacles: list[Obstacle],
     inner = planner_rectangle_polygon((INNER_WALL_X_CM, INNER_WALL_Y_CM, INNER_WALL_CM, INNER_WALL_CM))
     if planner_polygons_intersect(body, inner):
         return True
-    ignored_obstacles = ignored_obstacles or set()
-    return any(index not in ignored_obstacles and planner_polygons_intersect(
+    return any(planner_polygons_intersect(
         body, planner_rectangle_polygon((o.x - OBSTACLE_SIZE_CM / 2,
                                           o.y - OBSTACLE_SIZE_CM / 2,
                                           OBSTACLE_SIZE_CM, OBSTACLE_SIZE_CM)))
-        for index, o in enumerate(obstacles, start=1))
+        for o in obstacles)
 
 
 def is_in_start_zone(vehicle: Vehicle) -> bool:
     return start_zone_contains(vehicle.x, vehicle.y)
-
-
-def is_start_straight_obstacle(obstacle: Obstacle) -> bool:
-    """Obstacles placed on the lower starting straight."""
-    return 80.0 <= obstacle.x <= 220.0 and obstacle.y >= 230.0
 
 
 def track_straight_sector(vehicle: Vehicle) -> str | None:
@@ -312,6 +311,82 @@ def obstacle_straight_sector(obstacle: Obstacle) -> str | None:
     if obstacle.x >= 230.0:
         return "right"
     return None
+
+
+def straight_heading(straight: str, direction: TrackDirection) -> float:
+    """Heading longitudinal de una recta para evaluar el lado de paso."""
+    clockwise = direction is TrackDirection.CLOCKWISE
+    headings = {
+        TrackDirection.CLOCKWISE: {"bottom": math.pi, "left": -math.pi / 2,
+                                   "top": 0.0, "right": math.pi / 2},
+        TrackDirection.COUNTERCLOCKWISE: {"bottom": 0.0, "right": math.pi / 2,
+                                          "top": math.pi, "left": -math.pi / 2},
+    }
+    return headings[TrackDirection.CLOCKWISE if clockwise else TrackDirection.COUNTERCLOCKWISE][straight]
+
+
+def update_passed_obstacles(
+    vehicle: Vehicle,
+    obstacles: list[Obstacle],
+    direction: TrackDirection,
+    rear_margin_cm: float,
+) -> list[dict[str, object]]:
+    """Marca obstáculos superados y registra los pasos por el lado incorrecto."""
+    violations: list[dict[str, object]] = []
+    body = VehicleGeometry().footprint(VehicleState(
+        vehicle.x, vehicle.y, vehicle.heading, vehicle.speed_cm_s,
+        vehicle.acceleration_cm_s2, vehicle.steering_deg,
+    ))
+    for index, obstacle in enumerate(obstacles, 1):
+        if obstacle.passed or not obstacle.ever_detected:
+            continue
+        straight = obstacle_straight_sector(obstacle)
+        if straight is None:
+            continue
+        tangent = straight_heading(straight, direction)
+        forward = (math.cos(tangent), math.sin(tangent))
+        center_distance = math.dist((vehicle.x, vehicle.y), (obstacle.x, obstacle.y))
+        if center_distance < obstacle.closest_approach_distance_cm:
+            obstacle.closest_approach_distance_cm = center_distance
+            obstacle.closest_approach_side = get_local_side(
+                (vehicle.x, vehicle.y), (obstacle.x, obstacle.y), forward
+            )
+        obstacle_polygon = planner_rectangle_polygon((
+            obstacle.x - OBSTACLE_SIZE_CM / 2,
+            obstacle.y - OBSTACLE_SIZE_CM / 2,
+            OBSTACLE_SIZE_CM,
+            OBSTACLE_SIZE_CM,
+        ))
+        obstacle_front = max(point[0] * forward[0] + point[1] * forward[1]
+                             for point in obstacle_polygon)
+        vehicle_rear = min(point[0] * forward[0] + point[1] * forward[1]
+                            for point in body)
+        if vehicle_rear <= obstacle_front + rear_margin_cm:
+            continue
+        # El carro solo cuenta como pasado cuando todo su footprint ya quedó
+        # a un lado del obstáculo. Cruzar longitudinalmente por el centro no
+        # es un PASSED válido y no debe generar una falsa superación.
+        final_footprint_side = footprint_side(body, obstacle_polygon, forward)
+        if final_footprint_side is LocalSide.CENTER:
+            continue
+        actual_side = obstacle.closest_approach_side or final_footprint_side
+        if actual_side is LocalSide.CENTER:
+            actual_side = final_footprint_side
+        expected_side = "right" if obstacle.color.lower() == "red" else "left"
+        obstacle.pass_side_correct = (
+            actual_side.value == expected_side.upper()
+        )
+        obstacle.passed = True
+        obstacle.pass_count += 1
+        if not obstacle.pass_side_correct:
+            violations.append({
+                "obstacle_id": index,
+                "color": obstacle.color,
+                "straight": straight,
+                "expected_side": expected_side,
+                "actual_side": actual_side.value.lower(),
+            })
+    return violations
 
 
 def in_fov(vehicle: Vehicle, obstacle: Obstacle, fov_deg: float,
@@ -355,8 +430,54 @@ def movement_record(
     obstacle_clearance = min(obstacle_distances.values(), default=math.inf)
     result = controller.latest_result if controller and automatic else None
     diagnostics = result.diagnostics if result else None
+    selected_candidate = result.best_candidate if result else None
     selected_angle = diagnostics.selected_angle_deg if diagnostics else vehicle.target_steering_deg
     selected_speed = diagnostics.selected_speed_cm_s if diagnostics else vehicle.target_speed_cm_s
+    active_target_id = (
+        diagnostics.active_target_id if diagnostics else None
+    ) or (
+        selected_candidate.target_obstacle_id if selected_candidate else None
+    ) or (
+        diagnostics.target_obstacle_id if diagnostics else None
+    )
+    selected_pass_side = (
+        selected_candidate.desired_pass_side.value
+        if selected_candidate and selected_candidate.desired_pass_side
+        else diagnostics.desired_pass_side if diagnostics else None
+    )
+    candidate_summaries = []
+    if result:
+        candidate_summaries = [
+            {
+                "candidate_id": candidate.candidate_id,
+                "profile": candidate.profile.value if candidate.profile else None,
+                "primitives": [
+                    {
+                        "kind": primitive.kind.value,
+                        "distance_cm": round(primitive.distance_cm, 3),
+                        "steering_angle_deg": round(primitive.steering_angle_deg, 3),
+                    }
+                    for primitive in candidate.primitives
+                ],
+                "safe": candidate.safe,
+                "score": candidate.score if math.isfinite(candidate.score) else None,
+                "rejection_reason": candidate.diagnostic_rejection_reason,
+                "collision_type": candidate.collision_type,
+                "collision_object_id": candidate.collision_object_id,
+                "target_obstacle_id": candidate.target_obstacle_id,
+                "desired_pass_side": (
+                    candidate.desired_pass_side.value
+                    if candidate.desired_pass_side else None
+                ),
+                "minimum_clearance_cm": round(candidate.minimum_clearance_cm, 3)
+                if math.isfinite(candidate.minimum_clearance_cm) else None,
+                "minimum_obstacle_clearance_cm": round(candidate.minimum_obstacle_clearance_cm, 3)
+                if math.isfinite(candidate.minimum_obstacle_clearance_cm) else None,
+                "minimum_wall_clearance_cm": round(candidate.minimum_wall_clearance_cm, 3)
+                if math.isfinite(candidate.minimum_wall_clearance_cm) else None,
+            }
+            for candidate in result.candidates
+        ]
     return {
         "time_s": round(simulation_time_s,4), "mode": "AUTO" if automatic else "MANUAL",
         "vehicle_cm_deg": {"x":round(vehicle.x,3),"y":round(vehicle.y,3),
@@ -372,19 +493,42 @@ def movement_record(
         "decision": {"source":"PLANNER" if automatic else "MANUAL_INPUT",
             "state":result.state.value if result else state.name,"phase":planning_phase,
             "reason":result.reason if result else "keyboard_control",
-            "active_target_id":None,"selected_pass_side":None,
+            "active_target_id":active_target_id,
+            "target_obstacle_id":diagnostics.target_obstacle_id if diagnostics else None,
+            "selected_pass_side":selected_pass_side,
+            "selected_candidate_id":diagnostics.selected_candidate_id if diagnostics else None,
             "selected_angle_deg":round(selected_angle,3),"selected_speed_cm_s":round(selected_speed,3),
             "selected_radius_cm":None if geometry.turning_radius_cm(selected_angle) is None else round(abs(geometry.turning_radius_cm(selected_angle) or 0),3),
             "physical_collision":has_collision(vehicle,obstacles),"memory_states":{},
             "candidates_generated":diagnostics.candidates_generated if diagnostics else 0,
             "candidates_evaluated":diagnostics.candidates_evaluated if diagnostics else 0,
-            "calculation_time_ms":diagnostics.calculation_time_ms if diagnostics else 0.0},
+            "forward_candidates_generated":diagnostics.forward_candidates_generated if diagnostics else 0,
+            "forward_candidates_valid":diagnostics.forward_candidates_valid if diagnostics else 0,
+            "reverse_candidates_generated":diagnostics.reverse_candidates_generated if diagnostics else 0,
+            "reverse_candidates_valid":diagnostics.reverse_candidates_valid if diagnostics else 0,
+            "rejection_reasons":diagnostics.rejection_reasons if diagnostics else {},
+            "forward_rejections":diagnostics.forward_rejections if diagnostics else {},
+            "reverse_rejections":diagnostics.reverse_rejections if diagnostics else {},
+            "commitment_mode":diagnostics.commitment_mode if diagnostics else None,
+            "committed_candidate_id":diagnostics.committed_candidate_id if diagnostics else None,
+            "current_plan_score":diagnostics.current_plan_score if diagnostics else None,
+            "new_plan_score":diagnostics.new_plan_score if diagnostics else None,
+            "switch_margin":diagnostics.switch_margin if diagnostics else None,
+            "switched_plan":diagnostics.switched_plan if diagnostics else False,
+            "calculation_time_ms":diagnostics.calculation_time_ms if diagnostics else 0.0,
+            "candidate_summaries":candidate_summaries},
         "obstacles_cm":[{"id":i,"x":round(o.x,3),"y":round(o.y,3),"color":o.color,"passed":o.passed}
                         for i,o in enumerate(obstacles,1)],
         "avoidance_state":state.name,"track_direction":track_direction.value if track_direction else "pending_first_line",
         "planning_phase":planning_phase,"route":{"lap_completed":lap_completed,"straight_progress":straight_progress,
         "direction_locked":direction_locked},
     }
+
+
+def save_simulation_metrics(path: Path, metrics: dict[str, object]) -> None:
+    """Guarda el resultado final de una reproducción automática."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(metrics, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def save_calibration_sample(
@@ -479,9 +623,13 @@ def save_manual_recording(
         "safety_limit_triggered",
         "minimum_distance_cm", "minimum_obstacle_cm", "minimum_wall_cm",
         "physical_collision", "planner_state", "phase", "active_target_id",
-        "selected_pass_side", "decision_reason", "candidates_evaluated",
-        "calculation_time_ms", "lap_completed", "straight_progress", "track_direction",
-        "memory_states_json", "obstacle_distances_json",
+        "target_obstacle_id", "selected_pass_side", "selected_candidate_id",
+        "decision_reason", "candidates_evaluated", "forward_candidates_valid",
+        "reverse_candidates_valid", "rejection_reasons_json", "candidate_summaries_json",
+        "commitment_mode", "committed_candidate_id", "current_plan_score",
+        "new_plan_score", "switch_margin", "switched_plan", "calculation_time_ms",
+        "lap_completed", "straight_progress", "track_direction", "memory_states_json",
+        "obstacle_distances_json",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
@@ -524,9 +672,21 @@ def save_manual_recording(
                 "planner_state": decision.get("state"),
                 "phase": decision.get("phase"),
                 "active_target_id": decision.get("active_target_id"),
+                "target_obstacle_id": decision.get("target_obstacle_id"),
                 "selected_pass_side": decision.get("selected_pass_side"),
+                "selected_candidate_id": decision.get("selected_candidate_id"),
                 "decision_reason": decision.get("reason"),
                 "candidates_evaluated": decision.get("candidates_evaluated"),
+                "forward_candidates_valid": decision.get("forward_candidates_valid"),
+                "reverse_candidates_valid": decision.get("reverse_candidates_valid"),
+                "rejection_reasons_json": json.dumps(decision.get("rejection_reasons", {}), ensure_ascii=False),
+                "candidate_summaries_json": json.dumps(decision.get("candidate_summaries", []), ensure_ascii=False),
+                "commitment_mode": decision.get("commitment_mode"),
+                "committed_candidate_id": decision.get("committed_candidate_id"),
+                "current_plan_score": decision.get("current_plan_score"),
+                "new_plan_score": decision.get("new_plan_score"),
+                "switch_margin": decision.get("switch_margin"),
+                "switched_plan": decision.get("switched_plan"),
                 "calculation_time_ms": decision.get("calculation_time_ms"),
                 "lap_completed": route.get("lap_completed"),
                 "straight_progress": route.get("straight_progress"),
@@ -535,6 +695,93 @@ def save_manual_recording(
                 "obstacle_distances_json": json.dumps(distances.get("obstacles", {}), ensure_ascii=False),
             })
     return json_path, csv_path
+
+
+def save_decision_probe_case(
+    controller: SimulatorAutonomousAdapter,
+    vehicle: Vehicle,
+    obstacles: list[Obstacle],
+    scenario_mode: str,
+    scenario_seed: int,
+    scenario_index: int | None,
+    selected_candidate_id: str | None,
+    marked_as_wrong: bool,
+) -> Path:
+    """Guarda una pose probe completa para revisar decisiones erróneas."""
+    result = controller.latest_result
+    if result is None:
+        raise ValueError("Primero debe existir una decisión calculada")
+    probe_input = controller._input(vehicle, obstacles)
+    visible = [
+        {
+            "object_id": item.object_id,
+            "x_cm": item.x_cm,
+            "y_cm": item.y_cm,
+            "width_cm": item.width_cm,
+            "length_cm": item.length_cm,
+            "color": item.color,
+        }
+        for item in probe_input.visible_obstacles
+    ]
+    candidates = []
+    for candidate in result.candidates:
+        candidates.append({
+            "candidate_id": candidate.candidate_id,
+            "profile": candidate.profile.value if candidate.profile else None,
+            "primitives": [
+                {
+                    "kind": primitive.kind.value,
+                    "distance_cm": primitive.distance_cm,
+                    "steering_angle_deg": primitive.steering_angle_deg,
+                    "target_speed_cm_s": primitive.target_speed_cm_s,
+                }
+                for primitive in candidate.primitives
+            ],
+            "safe": candidate.safe,
+            "score": candidate.score if math.isfinite(candidate.score) else None,
+            "rejection_reason": candidate.diagnostic_rejection_reason,
+            "physical_collision": candidate.physical_collision,
+            "collision_type": candidate.collision_type,
+            "collision_object_id": candidate.collision_object_id,
+            "minimum_clearance_cm": candidate.minimum_clearance_cm,
+            "minimum_obstacle_clearance_cm": candidate.minimum_obstacle_clearance_cm,
+            "minimum_wall_clearance_cm": candidate.minimum_wall_clearance_cm,
+            "points": candidate.points,
+        })
+    DECISION_PROBE_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    path = DECISION_PROBE_DIR / f"decision_probe_{stamp}.json"
+    payload = {
+        "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
+        "scenario": {
+            "mode": int(scenario_mode),
+            "base_seed": scenario_seed,
+            "scenario_index": scenario_index,
+        },
+        "pose": {
+            "x_cm": vehicle.x,
+            "y_cm": vehicle.y,
+            "heading_deg": math.degrees(vehicle.heading),
+        },
+        "perception": {
+            "fov_deg": controller.fov_deg,
+            "visible_obstacles": visible,
+            "visible_walls": [
+                {"wall_id": wall.wall_id, "start": wall.start, "end": wall.end}
+                for wall in probe_input.visible_walls
+            ],
+        },
+        "decision": {
+            "planner_state": result.state.value,
+            "reason": result.reason,
+            "selected_candidate_id": result.diagnostics.selected_candidate_id,
+            "clicked_candidate_id": selected_candidate_id,
+            "marked_as_wrong": marked_as_wrong,
+            "candidates": candidates,
+        },
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=list) + "\n", encoding="utf-8")
+    return path
 
 
 def load_calibration_samples() -> list[dict[str, object]]:
@@ -676,7 +923,7 @@ def draw_vehicle(surface: pygame.Surface, vehicle: Vehicle, fov_deg: float, safe
         pygame.draw.line(surface, (245, 245, 245), world_to_screen(start), world_to_screen(end), 2)
     # FOV wedge and a rectangular safety zone around the complete body.
     origin = world_to_screen((vehicle.x, vehicle.y))
-    reach = 100.0
+    reach = FIXED_RULES.perception_range_cm
     angles = [vehicle.heading + math.radians(-fov_deg / 2 + fov_deg * i / 20) for i in range(21)]
     wedge = [origin] + [world_to_screen((vehicle.x + reach * math.cos(a), vehicle.y + reach * math.sin(a))) for a in angles]
     overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
@@ -711,7 +958,17 @@ def draw_obstacles(surface: pygame.Surface, obstacles: list[Obstacle]) -> None:
         x = int((obstacle.x - OBSTACLE_SIZE_CM / 2) * SCALE)
         y = int((obstacle.y - OBSTACLE_SIZE_CM / 2) * SCALE)
         size = int(OBSTACLE_SIZE_CM * SCALE)
-        pygame.draw.rect(surface, (160, 160, 160) if obstacle.passed else color, (x, y, size, size))
+        # El estado PASSED no cambia la identidad visual del obstáculo.
+        # Se conserva su color y solo se añade un borde para distinguirlo.
+        pygame.draw.rect(surface, color, (x, y, size, size))
+        if obstacle.passed and obstacle.pass_side_correct:
+            # Marca negra sobre el obstáculo completo; no cambia su tamaño.
+            center = (x + size // 2, y + size // 2)
+            pygame.draw.circle(surface, (15, 15, 15), center, max(2, round(2.5 * SCALE)))
+        elif obstacle.passed and obstacle.pass_side_correct is False:
+            # La X amarilla indica que se cruzó por el lado incorrecto.
+            pygame.draw.line(surface, (255, 225, 30), (x, y), (x + size, y + size), max(2, round(SCALE)))
+            pygame.draw.line(surface, (255, 225, 30), (x + size, y), (x, y + size), max(2, round(SCALE)))
 
 
 def draw_planner_overlay(surface: pygame.Surface, controller: SimulatorAutonomousAdapter) -> None:
@@ -725,6 +982,9 @@ def draw_planner_overlay(surface: pygame.Surface, controller: SimulatorAutonomou
         if result.best_candidate is candidate:
             color = (55, 220, 75)
             width = 3
+        elif getattr(controller, "probe_selected_candidate_id", None) == candidate.candidate_id:
+            color = (255, 255, 255)
+            width = 4
         elif candidate.safe:
             color = (245, 205, 45)
             width = 1
@@ -733,6 +993,34 @@ def draw_planner_overlay(surface: pygame.Surface, controller: SimulatorAutonomou
             width = 1
         validated = [world_to_screen(point) for point in candidate.points]
         pygame.draw.lines(surface, color, False, validated, width)
+
+
+def candidate_at_screen_point(
+    controller: SimulatorAutonomousAdapter,
+    screen_point: tuple[int, int],
+    max_distance_px: float = 8.0,
+):
+    """Devuelve el candidato más cercano a un click sobre sus líneas."""
+    result = controller.latest_result
+    if result is None:
+        return None
+    best = None
+    best_distance = max_distance_px
+    for candidate in result.candidates:
+        points = [world_to_screen(point) for point in candidate.points]
+        for start, end in zip(points, points[1:]):
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            length2 = dx * dx + dy * dy
+            t = 0.0 if length2 == 0 else max(0.0, min(1.0, (
+                (screen_point[0] - start[0]) * dx
+                + (screen_point[1] - start[1]) * dy
+            ) / length2))
+            projection = (start[0] + t * dx, start[1] + t * dy)
+            distance = math.dist(screen_point, projection)
+            if distance < best_distance:
+                best_distance = distance
+                best = candidate
+    return best
 
 
 def draw_panel_section(
@@ -765,10 +1053,12 @@ def draw_panel_section(
 
 def default_obstacles() -> list[Obstacle]:
     """Convert the shared scenario representation to the Pygame model."""
-    return [
-        Obstacle(item.x_cm, item.y_cm, item.color)
-        for item in default_scenario(2).objects
-    ]
+    return scenario_obstacles(default_scenario(2))
+
+
+def scenario_obstacles(scenario: Scenario) -> list[Obstacle]:
+    """Convert a shared deterministic scenario to the Pygame model."""
+    return [Obstacle(item.x_cm, item.y_cm, item.color) for item in scenario.objects]
 
 
 def seat_slot(seat: tuple[float, float]) -> tuple[str, int]:
@@ -800,72 +1090,110 @@ def add_obstacle_ahead(vehicle: Vehicle, obstacles: list[Obstacle], color: str) 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--max-steering-deg", type=float, default=None,
-                        help="Sobrescribe el máximo ángulo REAL del tuning JSON.")
     parser.add_argument("--fov-deg", type=float, default=DEFAULT_HORIZONTAL_FOV_DEG,
                         help=f"FOV horizontal de cámara (por defecto: {DEFAULT_HORIZONTAL_FOV_DEG} grados derivados de 78 grados diagonales a 16:9).")
-    parser.add_argument("--safety-margin-cm", type=float, default=None,
-                        help="Sobrescribe el margen obligatorio del tuning JSON.")
     parser.add_argument("--desired-clearance-cm", type=float, default=None,
-                        help="Sobrescribe el margen deseado del tuning JSON.")
-    parser.add_argument("--fixed-speed-cm-s", type=float, default=None,
-                        help="Sobrescribe la velocidad fija del tuning JSON.")
-    parser.add_argument("--replanning-period-s", type=float, default=None,
-                        help="Sobrescribe el periodo del tuning JSON.")
+                        help="Atajo de simulador para fijar el preferred clearance en los tres ejes.")
+    parser.add_argument("--disable-safety-margins", action="store_true",
+                        help="Simulador: permite probar trayectorias que pueden colisionar.")
+    parser.add_argument("--planning-horizon-cm", type=float, default=None,
+                        help="Sobrescribe la longitud de cada plan completo.")
+    parser.add_argument("--execution-horizon-min-cm", type=float, default=None,
+                        help="Sobrescribe la distancia mínima entre comparaciones.")
+    parser.add_argument("--execution-horizon-max-cm", type=float, default=None,
+                        help="Sobrescribe la distancia máxima entre comparaciones.")
+    parser.add_argument("--switch-margin", type=float, default=None,
+                        help="Sobrescribe la mejora mínima de score para cambiar.")
+    parser.add_argument("--diagnostic-level", choices=("full", "summary", "off"),
+                        default=None,
+                        help="Nivel de diagnóstico del planner; Pygame usa full por defecto.")
     parser.add_argument("--max-candidates", type=int, default=None,
                         help="Sobrescribe el presupuesto de candidatos del tuning JSON.")
     parser.add_argument("--max-planning-time-ms", type=float, default=None,
                         help="Sobrescribe el presupuesto de tiempo del tuning JSON.")
-    parser.add_argument("--preview-horizon-s", type=float, default=None,
-                        help="Sobrescribe el horizonte visual del tuning JSON.")
-    parser.add_argument("--planning-horizon-s", type=float, default=None,
-                        help="Sobrescribe el horizonte de validación del tuning JSON.")
-    parser.add_argument("--max-steering-rate-deg-s", type=float, default=None,
-                        help="Sobrescribe la velocidad máxima de steering del tuning JSON.")
-    parser.add_argument("--max-acceleration-cm-s2", type=float, default=None,
-                        help="Sobrescribe la aceleración del tuning JSON.")
-    parser.add_argument("--max-deceleration-cm-s2", type=float, default=None,
-                        help="Sobrescribe la desaceleración del tuning JSON.")
     parser.add_argument("--planner-config", type=Path, default=None,
                         help="Archivo JSON de PlannerTuning.")
+    parser.add_argument("--scenario-index", type=int, default=None,
+                        help="Índice del escenario reproducible generado por el runner.")
+    parser.add_argument("--scenario-seed", type=int, default=20260815,
+                        help="Seed del escenario reproducible (por defecto: 20260815).")
+    parser.add_argument("--scenario-mode", choices=("1", "2"), default="2",
+                        help="Modo del escenario generado: 1=sin obstáculos, 2=con obstáculos.")
+    parser.add_argument("--deterministic", action="store_true",
+                        help="Usa simulation_dt_s fijo y ejecuta el escenario sin esperar tiempo real.")
+    parser.add_argument("--decision-probe", action="store_true",
+                        help="Diagnóstico fijo: permite cambiar pose, calcular con P y no mueve el carro.")
+    parser.add_argument("--duration-s", type=float, default=180.0,
+                        help="Duración virtual máxima del modo determinista.")
+    parser.add_argument("--metrics-output", type=Path, default=None,
+                        help="Archivo JSON para las métricas finales de la reproducción.")
     parser.add_argument("--servo-command-deg", type=float, default=SERVO_LOGICAL_CENTER_DEG,
                         help="Comando lógico inicial del servo (por defecto: centro lógico 92 grados).")
     args = parser.parse_args()
     tuning_values = load_planner_tuning(args.planner_config)
+    tuning = tuning_values
+    if args.disable_safety_margins:
+        tuning = tuning.with_overrides(
+            disable_hard_safety_margins=True,
+            allow_physical_collisions=True,
+        )
+    if args.desired_clearance_cm is not None:
+        value = float(args.desired_clearance_cm)
+        tuning = tuning.with_overrides(
+            preferred_safety_margins=PreferredSafetyMargins(value, value, value),
+        )
     override_names = (
-        "max_steering_deg", "safety_margin_cm", "desired_clearance_cm",
-        "fixed_speed_cm_s", "replanning_period_s", "max_candidates",
-        "max_planning_time_ms", "preview_horizon_s", "planning_horizon_s",
-        "max_steering_rate_deg_s", "max_acceleration_cm_s2", "max_deceleration_cm_s2",
+        "max_candidates", "max_planning_time_ms", "planning_horizon_cm",
+        "execution_horizon_min_cm", "execution_horizon_max_cm", "switch_margin",
+        "diagnostic_level",
     )
     override_fields = {
         name: getattr(args, name)
         for name in override_names
         if getattr(args, name) is not None
     }
-    tuning = tuning_values.with_overrides(**override_fields)
-    args.max_steering_deg = tuning.max_steering_deg
-    args.safety_margin_cm = tuning.mandatory_clearance_cm
-    args.desired_clearance_cm = tuning.desired_clearance_cm
-    args.fixed_speed_cm_s = tuning.fixed_speed_cm_s
-    args.replanning_period_s = tuning.replanning_period_s
+    tuning = tuning.with_overrides(**override_fields)
+    if args.deterministic:
+        tuning = tuning.with_overrides(planning_budget_mode="candidate_count")
+    args.max_steering_deg = FIXED_RULES.maximum_physical_steering_deg
+    args.safety_margin_cm = 0.0 if tuning.disable_hard_safety_margins else FIXED_RULES.hard_side_clearance_cm
+    args.desired_clearance_cm = tuning.preferred_clearance_cm
+    args.fixed_speed_cm_s = FIXED_RULES.fixed_speed_cm_s
     args.max_candidates = tuning.max_candidates
     args.max_planning_time_ms = tuning.max_planning_time_ms
-    args.preview_horizon_s = tuning.preview_horizon_s
-    args.planning_horizon_s = tuning.planning_horizon_s
-    args.max_steering_rate_deg_s = tuning.max_steering_rate_deg_s
-    args.max_acceleration_cm_s2 = tuning.max_acceleration_cm_s2
-    args.max_deceleration_cm_s2 = tuning.max_deceleration_cm_s2
     if (not 0 < args.max_steering_deg < 89 or not 0 < args.fov_deg <= 180
             or args.safety_margin_cm < 0 or args.desired_clearance_cm < args.safety_margin_cm
-            or args.fixed_speed_cm_s <= 0 or args.fixed_speed_cm_s > 32.0
-            or args.replanning_period_s <= 0 or args.max_candidates <= 0
-            or args.max_planning_time_ms <= 0 or args.preview_horizon_s <= 0
-            or args.planning_horizon_s <= 0 or args.max_steering_rate_deg_s <= 0
-            or args.max_acceleration_cm_s2 <= 0 or args.max_deceleration_cm_s2 <= 0):
+            or args.max_candidates <= 0 or args.max_planning_time_ms <= 0):
         parser.error("Parámetros geométricos o presupuestos inválidos.")
     if not SERVO_SAFE_MIN_DEG <= args.servo_command_deg <= SERVO_SAFE_MAX_DEG:
         parser.error(f"El comando de servo debe estar entre {SERVO_SAFE_MIN_DEG:.0f} y {SERVO_SAFE_MAX_DEG:.0f} grados.")
+
+    if args.scenario_index is not None and args.scenario_index < 0:
+        parser.error("--scenario-index debe ser mayor o igual que cero.")
+    if args.duration_s <= 0:
+        parser.error("--duration-s debe ser positivo.")
+
+    # ``scenario_seed`` es la seed base. El índice selecciona una variante
+    # reproducible, igual que en planner_test_runner.py.
+    effective_scenario_seed = (
+        args.scenario_seed + args.scenario_index
+        if args.scenario_index is not None else args.scenario_seed
+    )
+    generated_scenario = (
+        Scenario(args.scenario_index, (), "pista sin obstáculos")
+        if args.scenario_mode == "1" else
+        # El runner convierte sus índices 0..3 en escenarios con 1..4
+        # obstáculos para que mode 2 nunca produzca accidentalmente una pista vacía.
+        generate_scenario(random.Random(effective_scenario_seed), args.scenario_index)
+        if args.scenario_index is not None else
+        default_scenario(2) if args.decision_probe else None
+    )
+    metrics_output = args.metrics_output
+    if args.deterministic and metrics_output is None and args.scenario_index is not None:
+        metrics_output = (
+            Path(__file__).resolve().parent / "planner_tests" / f"mode_{args.scenario_mode}"
+            / f"pygame_scenario{args.scenario_index}_seed{args.scenario_seed}" / "metrics.json"
+        )
 
     pygame.init()
     screen = pygame.display.set_mode(WINDOW_SIZE)
@@ -873,25 +1201,69 @@ def main() -> None:
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("monospace", 16)
     panel_font = pygame.font.SysFont("monospace", 12)
+    playback_speeds = (1.0, 1.5, 2.0, 3.0)
+    playback_speed = 1.0
+    panel_x_static = int(TRACK_CM * SCALE) + 10
+    speed_button_rects = {
+        speed: pygame.Rect(panel_x_static + 8 + index * 58, 28, 52, 22)
+        for index, speed in enumerate(playback_speeds)
+    }
     vehicle = Vehicle()
-    obstacle_mode = 1
-    obstacles: list[Obstacle] = []
+    obstacle_mode = 2 if generated_scenario is not None else 1
+    active_scenario = generated_scenario or default_scenario(1)
+    obstacles: list[Obstacle] = scenario_obstacles(active_scenario) if obstacle_mode == 2 else []
+
+    def reset_obstacles() -> list[Obstacle]:
+        return scenario_obstacles(active_scenario) if obstacle_mode == 2 else []
     # No route is active until the first colored line fixes the sense of travel.
     controller = SimulatorAutonomousAdapter(
         tuning, args.fov_deg, TRACK_OUTER_WALL, TRACK_INNER_WALL, OBSTACLE_SIZE_CM
     )
-    automatic, running = False, True
+    # Un escenario generado por CLI se usa como reproducción automática. Sin
+    # esos argumentos se conserva el arranque manual habitual del simulador.
+    automatic = (
+        not args.decision_probe
+        and generated_scenario is not None
+        and args.scenario_mode == "2"
+    )
+    probe_dragging = False
+    probe_selected_candidate_id: str | None = None
+    running = True
     lap_completed = False
     visited_straights: set[str] = set()
     track_direction: TrackDirection | None = None
     direction_locked = False
+    if args.decision_probe:
+        track_direction = TrackDirection.CLOCKWISE
+        direction_locked = True
+        controller.set_track_direction(track_direction, centerline_route(track_direction))
+        controller.probe_selected_candidate_id = None
     straight_progress = 0
+    laps_completed_count = 0
     last_straight: str | None = None
     finish_armed = False
     servo_command_deg = args.servo_command_deg
     calibration_samples = load_calibration_samples()
     simulation_time_s = 0.0
     last_manual_run: tuple[Path, Path] | None = None
+    last_probe_case: Path | None = None
+    probe_marked_wrong = False
+    collision_occurred = False
+    termination_reason = "running"
+    reverse_count = 0
+    was_reversing = False
+    distance_traveled_cm = 0.0
+    rule_violations: list[dict[str, object]] = []
+
+    def reset_run_metrics() -> None:
+        nonlocal collision_occurred, termination_reason, reverse_count
+        nonlocal was_reversing, distance_traveled_cm, rule_violations
+        collision_occurred = False
+        termination_reason = "running"
+        reverse_count = 0
+        was_reversing = False
+        distance_traveled_cm = 0.0
+        rule_violations = []
 
     def current_record() -> dict[str, object]:
         return movement_record(
@@ -900,17 +1272,100 @@ def main() -> None:
             lap_completed, straight_progress, direction_locked,
         )
 
+    def restart_replay() -> None:
+        """Reinicia la misma reproducción determinista desde el comienzo."""
+        nonlocal vehicle, obstacles, automatic, lap_completed
+        nonlocal simulation_time_s, track_direction, direction_locked
+        nonlocal straight_progress, last_straight, finish_armed
+        nonlocal laps_completed_count
+        nonlocal movement_history, running
+        nonlocal probe_marked_wrong
+        vehicle = Vehicle()
+        obstacles = reset_obstacles()
+        controller.reset()
+        controller.route_points = []
+        automatic = (
+            not args.decision_probe
+            and generated_scenario is not None
+            and args.scenario_mode == "2"
+        )
+        lap_completed = False
+        visited_straights.clear()
+        simulation_time_s = 0.0
+        track_direction = None
+        direction_locked = False
+        if args.decision_probe:
+            track_direction = TrackDirection.CLOCKWISE
+            direction_locked = True
+            controller.set_track_direction(track_direction, centerline_route(track_direction))
+            controller.latest_result = None
+            probe_selected_candidate_id = None
+            controller.probe_selected_candidate_id = None
+        straight_progress = 0
+        laps_completed_count = 0
+        last_straight = None
+        finish_armed = False
+        reset_run_metrics()
+        probe_marked_wrong = False
+        movement_history = [current_record()]
+        running = True
+
+    reset_run_metrics()
     movement_history = [current_record()]
 
     while running:
-        dt = min(clock.tick(60) / 1000, 0.05)
+        if args.deterministic:
+            clock.tick(max(1, round(20 * playback_speed)))
+            dt = FIXED_RULES.simulation_dt_s
+        else:
+            dt = min(clock.tick(max(1, round(60 * playback_speed))) / 1000, 0.05)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if args.decision_probe:
+                    vehicle_screen = world_to_screen((vehicle.x, vehicle.y))
+                    if math.dist(event.pos, vehicle_screen) <= 18:
+                        probe_dragging = True
+                    elif event.pos[0] < TRACK_CM * SCALE:
+                        selected = candidate_at_screen_point(controller, event.pos)
+                        probe_selected_candidate_id = selected.candidate_id if selected else None
+                        controller.probe_selected_candidate_id = probe_selected_candidate_id
+                else:
+                    for speed, button_rect in speed_button_rects.items():
+                        if button_rect.collidepoint(event.pos):
+                            playback_speed = speed
+                            break
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                probe_dragging = False
+            elif event.type == pygame.MOUSEMOTION and args.decision_probe and probe_dragging:
+                if event.pos[0] < TRACK_CM * SCALE and event.pos[1] < TRACK_CM * SCALE:
+                    vehicle.x = max(0.0, min(TRACK_CM, event.pos[0] / SCALE))
+                    vehicle.y = max(0.0, min(TRACK_CM, event.pos[1] / SCALE))
+                    vehicle.speed_cm_s = 0.0
+                    vehicle.acceleration_cm_s2 = 0.0
+                    vehicle.target_speed_cm_s = 0.0
+                    vehicle.target_steering_deg = 0.0
+                    controller.latest_result = None
+                    probe_selected_candidate_id = None
+                    controller.probe_selected_candidate_id = None
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
-                elif event.key == pygame.K_a:
+                elif args.decision_probe and event.key == pygame.K_LEFT:
+                    vehicle.heading = (vehicle.heading - math.radians(5.0) + math.pi) % (2 * math.pi) - math.pi
+                    controller.latest_result = None
+                    probe_selected_candidate_id = None
+                    controller.probe_selected_candidate_id = None
+                elif args.decision_probe and event.key == pygame.K_RIGHT:
+                    vehicle.heading = (vehicle.heading + math.radians(5.0) + math.pi) % (2 * math.pi) - math.pi
+                    controller.latest_result = None
+                    probe_selected_candidate_id = None
+                    controller.probe_selected_candidate_id = None
+                elif args.decision_probe and event.key == pygame.K_e:
+                    if controller.latest_result is not None and probe_selected_candidate_id:
+                        probe_marked_wrong = True
+                elif not args.decision_probe and event.key == pygame.K_a:
                     # Starting automatic mode is always a fresh trial. Before
                     # this reset, pressing A after a saved/manual/finished run
                     # could leave the vehicle at an old pose with a completed
@@ -921,7 +1376,7 @@ def main() -> None:
                     else:
                         automatic = True
                         vehicle = Vehicle()
-                        obstacles = [] if obstacle_mode == 1 else default_obstacles()
+                        obstacles = reset_obstacles()
                         controller.reset()
                         controller.route_points = []
                         lap_completed = False
@@ -930,27 +1385,19 @@ def main() -> None:
                         track_direction = None
                         direction_locked = False
                         straight_progress = 0
+                        laps_completed_count = 0
                         last_straight = None
                         finish_armed = False
+                        reset_run_metrics()
                         movement_history = [current_record()]
                 elif event.key == pygame.K_r:
-                    vehicle = Vehicle()
-                    obstacles = [] if obstacle_mode == 1 else default_obstacles()
-                    controller.reset()
-                    controller.route_points = []
-                    lap_completed = False
-                    visited_straights.clear()
-                    simulation_time_s = 0.0
-                    track_direction = None
-                    direction_locked = False
-                    straight_progress = 0
-                    last_straight = None
-                    finish_armed = False
-                    movement_history = [current_record()]
+                    restart_replay()
                 elif event.key in (pygame.K_1, pygame.K_2):
                     obstacle_mode = 1 if event.key == pygame.K_1 else 2
+                    generated_scenario = None
+                    active_scenario = default_scenario(obstacle_mode)
                     vehicle = Vehicle()
-                    obstacles = [] if obstacle_mode == 1 else default_obstacles()
+                    obstacles = reset_obstacles()
                     controller.reset()
                     controller.route_points = []
                     lap_completed = False
@@ -958,9 +1405,11 @@ def main() -> None:
                     track_direction = None
                     direction_locked = False
                     straight_progress = 0
+                    laps_completed_count = 0
                     last_straight = None
                     simulation_time_s = 0.0
                     finish_armed = False
+                    reset_run_metrics()
                     movement_history = [current_record()]
                 elif event.key == pygame.K_o:
                     if not direction_locked:
@@ -986,11 +1435,28 @@ def main() -> None:
                     save_calibration_sample(vehicle, servo_command_deg, args.max_steering_deg, args.fov_deg,
                                             calibration_samples, movement_history)
                 elif event.key == pygame.K_s:
-                    last_manual_run = save_manual_recording(
-                        movement_history, vehicle, obstacle_mode, controller.planner.geometry.fixed_speed_cm_s
-                    )
+                    if args.decision_probe:
+                        if controller.latest_result is not None:
+                            last_probe_case = save_decision_probe_case(
+                                controller, vehicle, obstacles, args.scenario_mode,
+                                args.scenario_seed, args.scenario_index,
+                                probe_selected_candidate_id, probe_marked_wrong,
+                            )
+                            probe_marked_wrong = False
+                    else:
+                        last_manual_run = save_manual_recording(
+                            movement_history, vehicle, obstacle_mode, controller.planner.geometry.fixed_speed_cm_s
+                        )
 
-        if automatic:
+        if args.decision_probe:
+            controller.decision_probe(vehicle, obstacles)
+            # El probe nunca ejecuta el comando seleccionado ni integra
+            # movimiento; la pose solo cambia por mouse y LEFT/RIGHT.
+            vehicle.target_speed_cm_s = 0.0
+            vehicle.target_steering_deg = 0.0
+            vehicle.speed_cm_s = 0.0
+            vehicle.acceleration_cm_s2 = 0.0
+        elif automatic:
             if track_direction is None:
                 # Desde la zona de salida avanza recto hasta que el frente
                 # reconoce la primera línea; su color fija el sentido.
@@ -1032,13 +1498,28 @@ def main() -> None:
                                            + (-args.max_steering_deg if keys[pygame.K_LEFT] else 0.0))
         previous = (vehicle.x, vehicle.y, vehicle.heading, vehicle.speed_cm_s, vehicle.steering_deg)
         vehicle.step(dt)
+        step_distance_cm = math.dist((previous[0], previous[1]), (vehicle.x, vehicle.y))
+        distance_traveled_cm += step_distance_cm
+        reversing = vehicle.speed_cm_s < -0.5
+        if reversing and not was_reversing:
+            reverse_count += 1
+        was_reversing = reversing
         # Obstacles on the starting straight are active from the first frame.
-        ignored_obstacles = set()
-        if has_collision(vehicle, obstacles, ignored_obstacles):
+        if not args.decision_probe and has_collision(vehicle, obstacles):
+            distance_traveled_cm -= step_distance_cm
             vehicle.x, vehicle.y, vehicle.heading, vehicle.speed_cm_s, vehicle.steering_deg = previous
             vehicle.target_speed_cm_s = vehicle.target_steering_deg = 0.0
+            collision_occurred = True
+            termination_reason = "collision"
             if automatic:
                 controller.state = AvoidState.EMERGENCY_STOP
+            if args.deterministic:
+                running = False
+        if automatic and track_direction is not None:
+            rule_violations.extend(update_passed_obstacles(
+                vehicle, obstacles, track_direction,
+                0.0 if controller.planner.tuning.disable_hard_safety_margins else FIXED_RULES.hard_rear_clearance_cm,
+            ))
         if automatic and track_direction is not None:
             sector = track_straight_sector(vehicle)
             if sector is not None and sector != last_straight:
@@ -1051,14 +1532,46 @@ def main() -> None:
                 last_straight = sector
         if (automatic and track_direction is not None and finish_armed
                 and simulation_time_s > 20.0
-                and is_in_start_zone(vehicle)
-                and controller.aligned_after_line(vehicle)):
-            lap_completed = True
-            automatic = False
-            vehicle.target_speed_cm_s = vehicle.target_steering_deg = 0.0
-            vehicle.speed_cm_s = vehicle.steering_deg = 0.0
+                and is_in_start_zone(vehicle)):
+            laps_completed_count += 1
+            if laps_completed_count >= 3:
+                all_obstacles_crossed = (
+                    not obstacles
+                    or all(obstacle.pass_count >= 3 for obstacle in obstacles)
+                )
+                lap_completed = all_obstacles_crossed
+                termination_reason = (
+                    "completed" if all_obstacles_crossed
+                    else "incomplete_obstacle_crossing"
+                )
+                automatic = False
+                vehicle.target_speed_cm_s = vehicle.target_steering_deg = 0.0
+                vehicle.speed_cm_s = vehicle.steering_deg = 0.0
+                running = False
+            else:
+                # La misma configuración de obstáculos se reutiliza en la
+                # siguiente vuelta, pero cada obstáculo vuelve a estar activo.
+                lap_completed = False
+                straight_progress = 0
+                visited_straights.clear()
+                finish_armed = False
+                last_straight = sector
+                for obstacle in obstacles:
+                    obstacle.passed = False
+                    obstacle.ever_detected = False
+                    obstacle.pass_side_correct = None
+                    obstacle.closest_approach_distance_cm = math.inf
+                    obstacle.closest_approach_side = None
+                controller.reset()
+                controller.set_track_direction(
+                    track_direction, centerline_route(track_direction)
+                )
         simulation_time_s += dt
         movement_history.append(current_record())
+        if (args.deterministic and not args.decision_probe and running
+                and simulation_time_s >= args.duration_s):
+            termination_reason = "timeout"
+            running = False
 
         draw_track(screen)
         if len(vehicle.path) > 1:
@@ -1079,31 +1592,76 @@ def main() -> None:
         selected_radius = diagnostics.selected_radius_cm if diagnostics else vehicle.radius_cm()
         selected_angle = diagnostics.selected_angle_deg if diagnostics else vehicle.target_steering_deg
         memory = "solo objetos visibles"
-        saved_name = last_manual_run[0].stem if last_manual_run else "-"
+        saved_name = (
+            last_probe_case.stem if args.decision_probe and last_probe_case
+            else last_manual_run[0].stem if last_manual_run else "-"
+        )
 
         title = panel_font.render("WRO 2026  |  SIMULATOR 2D", True, (245, 245, 245))
         screen.blit(title, (panel_x + 8, 6))
         mode_text = panel_font.render(
-            f"{'AUTO' if automatic else 'MANUAL'}  |  t={simulation_time_s:05.1f}s",
+            f"{'DECISION PROBE' if args.decision_probe else 'AUTO' if automatic else 'MANUAL'}  |  t={simulation_time_s:05.1f}s",
             True, (100, 230, 130) if automatic else (255, 210, 90),
         )
         screen.blit(mode_text, (panel_x + panel_width - mode_text.get_width() - 8, 6))
-        y = 30
+        for speed, button_rect in speed_button_rects.items():
+            selected = speed == playback_speed
+            pygame.draw.rect(
+                screen, (70, 150, 95) if selected else (55, 60, 72),
+                button_rect, border_radius=3,
+            )
+            pygame.draw.rect(screen, (180, 190, 205), button_rect, width=1, border_radius=3)
+            label = panel_font.render(f"x{speed:g}", True, (245, 245, 245))
+            screen.blit(label, (
+                button_rect.centerx - label.get_width() // 2,
+                button_rect.centery - label.get_height() // 2,
+            ))
+        y = 58
+        scenario_name = (
+            f"mode {args.scenario_mode} | index {args.scenario_index} / "
+            f"seed {effective_scenario_seed} (base {args.scenario_seed})"
+            if generated_scenario is not None
+            else f"{obstacle_mode} | {'clear' if obstacle_mode == 1 else 'obstacles'}"
+        )
         y = draw_panel_section(screen, panel_font, panel_x, y, panel_width, "Run / route", [
-            ("scenario", f"{obstacle_mode} | {'clear' if obstacle_mode == 1 else 'obstacles'}"),
-            ("lap / straights", f"{'DONE' if lap_completed else 'run'} | {min(straight_progress, 4)}/4"),
+            ("scenario", scenario_name),
+            ("lap / straights", f"{laps_completed_count}/3 | {min(straight_progress, 4)}/4"),
             ("direction", track_direction.value if track_direction else "searching line"),
             ("direction lock", "YES" if direction_locked else "NO"),
         ], (80, 170, 255))
-        y = draw_panel_section(screen, panel_font, panel_x, y, panel_width, "Planner decision", [
+        probe_candidate = None
+        if args.decision_probe and result is not None and probe_selected_candidate_id:
+            probe_candidate = next(
+                (candidate for candidate in result.candidates
+                 if candidate.candidate_id == probe_selected_candidate_id),
+                None,
+            )
+        decision_rows = [
             ("FSM", controller.planner_state),
             ("phase", controller.planning_phase),
             ("candidate", diagnostics.selected_candidate_id if diagnostics and diagnostics.selected_candidate_id else "-"),
             ("commitment", diagnostics.committed_candidate_id if diagnostics and diagnostics.committed_candidate_id else "-"),
+            ("commit mode", diagnostics.commitment_mode if diagnostics else "-"),
+            ("scores current / new", f"{diagnostics.current_plan_score:.1f} / {diagnostics.new_plan_score:.1f}" if diagnostics and math.isfinite(diagnostics.new_plan_score) else "- / -"),
+            ("switch / exec", f"{diagnostics.switch_margin:.1f} / {diagnostics.execution_horizon_cm:.1f} cm" if diagnostics else "- / -"),
             ("angle / radius", f"{selected_angle:+.1f} deg / {metric(abs(selected_radius) if selected_radius is not None else None)} cm"),
             ("candidates / time", f"{diagnostics.candidates_evaluated if diagnostics else 0} / {diagnostics.calculation_time_ms if diagnostics else 0:.2f} ms"),
             ("reason", result.reason if result and result.reason else "continuous / manual"),
-        ], (150, 205, 255) if not result or result.state is not PlannerState.NO_SAFE_TRAJECTORY else (255, 150, 80))
+        ]
+        if args.decision_probe:
+            score = "-"
+            if probe_candidate is not None:
+                score = f"{probe_candidate.score:.2f}" if math.isfinite(probe_candidate.score) else "-inf"
+            decision_rows.extend([
+                ("click", "inspect candidate line"),
+                ("clicked", probe_candidate.candidate_id if probe_candidate else "-"),
+                ("clicked score", score),
+                ("clicked valid", str(probe_candidate.safe) if probe_candidate else "-"),
+                ("clicked reason", (probe_candidate.diagnostic_rejection_reason or "VALID") if probe_candidate else "-"),
+                ("clicked primitive", "+".join(p.kind.value for p in probe_candidate.primitives) if probe_candidate else "-"),
+            ])
+        y = draw_panel_section(screen, panel_font, panel_x, y, panel_width, "Planner decision", decision_rows,
+                               (150, 205, 255) if not result or result.state is not PlannerState.NO_SAFE_TRAJECTORY else (255, 150, 80))
         left_wheel_deg, right_wheel_deg = controller.planner.geometry.ackermann_wheel_angles_deg(vehicle.steering_deg)
         target_left_wheel_deg, target_right_wheel_deg = controller.planner.geometry.ackermann_wheel_angles_deg(vehicle.target_steering_deg)
         y = draw_panel_section(screen, panel_font, panel_x, y, panel_width, "Vehicle / command", [
@@ -1120,20 +1678,83 @@ def main() -> None:
             ("min wall / total", f"{metric(diagnostics.minimum_wall_clearance_cm if diagnostics else None)} / {metric(diagnostics.minimum_clearance_cm if diagnostics else None)} cm"),
             ("clearance req / desired", f"{args.safety_margin_cm:.1f} / {args.desired_clearance_cm:.1f} cm"),
             ("straight projection", "clear" if diagnostics and diagnostics.straight_projection_safe else "blocked"),
-            ("FOV / replan", f"{args.fov_deg:.1f} deg / {args.replanning_period_s:.2f} s"),
-            ("lines / valid", f"{controller.planner.preview_horizon_s:.1f} / {controller.planner.planning_horizon_s:.1f} s"),
+            ("FOV / execute", f"{args.fov_deg:.1f} deg / {diagnostics.execution_horizon_cm:.1f} cm" if diagnostics else f"{args.fov_deg:.1f} deg / -"),
+            ("prediction / footprint", f"{controller.planner.prediction_horizon_cm:.1f} cm / full rotated rectangle"),
+            ("plan / dt", f"{controller.planner.prediction_horizon_cm:.1f} cm / {FIXED_RULES.simulation_dt_s:.2f} s"),
         ], (255, 205, 80))
         y = draw_panel_section(screen, panel_font, panel_x, y, panel_width, "Manual recording", [
-            ("control", "arrows | S save JSON+CSV"),
+            ("control", "arrows | S save JSON+CSV" if not args.decision_probe else "drag | LEFT/RIGHT rotate | E mark wrong | S save"),
+            ("marked wrong", "YES" if args.decision_probe and probe_marked_wrong else "NO"),
             ("frames / samples", f"{len(movement_history)} / {len(calibration_samples)}"),
             ("last file", saved_name),
         ], (245, 180, 75))
         draw_panel_section(screen, panel_font, panel_x, y, panel_width, "Perception input", [
             ("states", memory),
             ("C", "save steering calibration sample"),
-            ("R / A / 1-2", "reset / auto / scenario"),
+            ("R / A / 1-2", "reset / auto / fixed scenario"),
         ], (190, 160, 255))
         pygame.display.flip()
+
+    # En una reproducción determinista, conserva el último fotograma para
+    # poder inspeccionar el recorrido y sus métricas. La ventana se cierra
+    # únicamente cuando el usuario pulsa ESC o el botón de cerrar.
+    if termination_reason != "running":
+        waiting_for_close = True
+        replay_requested = False
+        while waiting_for_close:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT or (
+                    event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+                ):
+                    waiting_for_close = False
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                    replay_requested = True
+                    waiting_for_close = False
+            clock.tick(30)
+        if replay_requested:
+            # Reentra en el mismo proceso con los mismos argumentos de CLI;
+            # la seed y el índice vuelven a generar exactamente el mismo caso.
+            pygame.quit()
+            return main()
+
+    if metrics_output is not None:
+        clearance_values = [
+            record["distances_cm"]["minimum"]
+            for record in movement_history
+            if record["distances_cm"]["minimum"] is not None
+        ]
+        metrics = {
+            "scenario_index": args.scenario_index,
+            "base_seed": args.scenario_seed,
+            "effective_seed": effective_scenario_seed,
+            "scenario_seed": effective_scenario_seed,
+            "scenario_mode": int(args.scenario_mode),
+            "deterministic": args.deterministic,
+            "completed_lap": lap_completed,
+            "collision": collision_occurred,
+            "lap_time_s": round(simulation_time_s, 4) if lap_completed else None,
+            "min_clearance_cm": min(clearance_values, default=None),
+            "distance_traveled_cm": round(distance_traveled_cm, 4),
+            "reverse_count": reverse_count,
+            "rule_violations": rule_violations,
+        "obstacles_passed": sum(obstacle.pass_count for obstacle in obstacles),
+        "obstacle_pass_counts": {
+            str(index): obstacle.pass_count
+            for index, obstacle in enumerate(obstacles, 1)
+        },
+        "all_obstacles_crossed_three_times": bool(obstacles) and all(
+            obstacle.pass_count >= 3 for obstacle in obstacles
+        ),
+            "termination_reason": termination_reason,
+            "failure_location": None if lap_completed else {
+                "lap": 1,
+                "straight": min(straight_progress + 1, 4),
+                "step": max(0, len(movement_history) - 1),
+            },
+            "steps": max(0, len(movement_history) - 1),
+            "simulation_time_s": round(simulation_time_s, 4),
+        }
+        save_simulation_metrics(metrics_output, metrics)
     pygame.quit()
 
 

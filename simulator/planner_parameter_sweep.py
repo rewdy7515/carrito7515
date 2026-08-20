@@ -12,10 +12,10 @@ from typing import Iterable
 
 try:
     from planner_test_runner import PlannerConfig, SensorModel, run_scenario
-    from planner_tuning import load_planner_tuning
+    from planner_tuning import PreferredSafetyMargins, load_planner_tuning
 except ImportError:
     from simulator.planner_test_runner import PlannerConfig, SensorModel, run_scenario
-    from simulator.planner_tuning import load_planner_tuning
+    from simulator.planner_tuning import PreferredSafetyMargins, load_planner_tuning
 
 
 def parse_values(raw: str, cast=float) -> list[float]:
@@ -61,14 +61,12 @@ def aggregate_configuration(
     )
     return {
         "configuration_id": config_id,
-        "fixed_speed_cm_s": config.fixed_speed_cm_s,
-        "mandatory_clearance_cm": config.mandatory_clearance_cm,
-        "desired_clearance_cm": config.desired_clearance_cm,
-        "replanning_period_s": config.replanning_period_s,
-        "planning_horizon_s": config.planning_horizon_s,
-        "max_steering_rate_deg_s": config.max_steering_rate_deg_s,
-        "max_acceleration_cm_s2": config.max_acceleration_cm_s2,
-        "max_deceleration_cm_s2": config.max_deceleration_cm_s2,
+        "planning_horizon_cm": config.planning_horizon_cm,
+        "beam_width": config.beam_width,
+        "execution_horizon_min_cm": config.execution_horizon_min_cm,
+        "execution_horizon_max_cm": config.execution_horizon_max_cm,
+        "switch_margin": config.switch_margin,
+        "preferred_clearance_cm": config.preferred_clearance_cm,
         "parameters": asdict(config),
         "scenarios": count,
         "collisions": collisions,
@@ -90,34 +88,31 @@ def aggregate_configuration(
 
 
 def configurations_from_grid(
-    fixed_speed: Iterable[float],
-    mandatory: Iterable[float],
-    desired: Iterable[float],
-    replanning: Iterable[float],
+    preferred: Iterable[float],
     horizon: Iterable[float],
-    steering_rate: Iterable[float],
-    acceleration: Iterable[float],
-    deceleration: Iterable[float],
+    beam_width: Iterable[int],
+    execution_min: Iterable[float],
+    execution_max: Iterable[float],
+    switch_margin: Iterable[float],
     base_tuning: PlannerConfig | None = None,
 ) -> list[PlannerConfig]:
     configurations: list[PlannerConfig] = []
     base = base_tuning or PlannerConfig()
     for values in itertools.product(
-        fixed_speed, mandatory, desired, replanning, horizon, steering_rate,
-        acceleration, deceleration,
+        preferred, horizon, beam_width, execution_min, execution_max, switch_margin,
     ):
-        speed_cm_s, mandatory_cm, desired_cm, period_s, horizon_s, rate, accel, decel = values
-        if desired_cm < mandatory_cm:
+        preferred_cm, horizon_cm, width, minimum_cm, maximum_cm, margin = values
+        if maximum_cm < minimum_cm:
             continue
         configurations.append(base.with_overrides(
-            fixed_speed_cm_s=speed_cm_s,
-            mandatory_clearance_cm=mandatory_cm,
-            desired_clearance_cm=desired_cm,
-            replanning_period_s=period_s,
-            planning_horizon_s=horizon_s,
-            max_steering_rate_deg_s=rate,
-            max_acceleration_cm_s2=accel,
-            max_deceleration_cm_s2=decel,
+            preferred_safety_margins=PreferredSafetyMargins(
+                preferred_cm, preferred_cm, preferred_cm,
+            ),
+            planning_horizon_cm=horizon_cm,
+            beam_width=int(width),
+            execution_horizon_min_cm=minimum_cm,
+            execution_horizon_max_cm=maximum_cm,
+            switch_margin=margin,
         ))
     return configurations
 
@@ -127,22 +122,16 @@ def main() -> None:
     parser.add_argument("--scenarios", type=int, default=20)
     parser.add_argument("--seed", type=int, default=20260815)
     parser.add_argument("--duration-s", type=float, default=20.0)
-    parser.add_argument("--fixed-speed-cm-s", default="24",
-                        help="Una velocidad o lista separada por coma para comparar; ejemplo: 15,18,21")
     parser.add_argument("--output-dir", type=Path, default=Path("/tmp/wro_planner_sweep"))
     parser.add_argument("--planner-config", type=Path, default=None,
                         help="Archivo JSON base de PlannerTuning.")
-    parser.add_argument("--mandatory-clearance-cm", default="9,10,11",
-                        help="Valores separados por coma; ejemplo: 8,10,12")
-    parser.add_argument("--desired-clearance-cm", default="13,15",
-                        help="Valores separados por coma; siempre >= mandatory")
-    parser.add_argument("--replanning-period-s", default="0.15,0.20,0.25")
-    parser.add_argument("--planning-horizon-s", default="1.5,2.0,2.5")
-    parser.add_argument("--steering-rate-deg-s", default="90")
-    parser.add_argument("--acceleration-cm-s2", default="45",
-                        help="Valores separados por coma; ejemplo: 35,45,55")
-    parser.add_argument("--deceleration-cm-s2", default="70",
-                        help="Valores separados por coma; ejemplo: 55,70,85")
+    parser.add_argument("--preferred-clearance-cm", default="13,15",
+                        help="Valores preferred comparados en los tres ejes.")
+    parser.add_argument("--planning-horizon-cm", default="50")
+    parser.add_argument("--beam-width", default="4")
+    parser.add_argument("--execution-horizon-min-cm", default="6")
+    parser.add_argument("--execution-horizon-max-cm", default="15")
+    parser.add_argument("--switch-margin", default="8")
     parser.add_argument("--noise-position-cm", type=float, default=0.0)
     parser.add_argument("--noise-heading-deg", type=float, default=0.0)
     parser.add_argument("--latency-s", type=float, default=0.0)
@@ -155,18 +144,14 @@ def main() -> None:
 
     base_tuning = load_planner_tuning(args.planner_config)
     configs = configurations_from_grid(
-        parse_values(args.fixed_speed_cm_s),
-        parse_values(args.mandatory_clearance_cm),
-        parse_values(args.desired_clearance_cm),
-        parse_values(args.replanning_period_s),
-        parse_values(args.planning_horizon_s),
-        parse_values(args.steering_rate_deg_s),
-        parse_values(args.acceleration_cm_s2),
-        parse_values(args.deceleration_cm_s2),
+        parse_values(args.preferred_clearance_cm),
+        parse_values(args.planning_horizon_cm),
+        parse_values(args.beam_width, int),
+        parse_values(args.execution_horizon_min_cm),
+        parse_values(args.execution_horizon_max_cm),
+        parse_values(args.switch_margin),
         base_tuning,
     )
-    if any(speed <= 0 or speed > 32 for speed in parse_values(args.fixed_speed_cm_s)):
-        parser.error("fixed-speed-cm-s debe estar entre 0 y 32 cm/s")
     if not configs:
         parser.error("No hay combinaciones válidas: desired-clearance debe ser >= mandatory-clearance")
 
@@ -181,13 +166,11 @@ def main() -> None:
     for config_id, config in enumerate(configs, start=1):
         print(
             f"Configuracion {config_id}/{len(configs)}: "
-            f"speed={config.fixed_speed_cm_s:g} cm/s, "
-            f"clearance={config.mandatory_clearance_cm:g}/"
-            f"{config.desired_clearance_cm:g} cm, "
-            f"replan={config.replanning_period_s:g} s, "
-            f"horizon={config.planning_horizon_s:g} s, "
-            f"steering_rate={config.max_steering_rate_deg_s:g} deg/s, "
-            f"accel/decel={config.max_acceleration_cm_s2:g}/{config.max_deceleration_cm_s2:g} cm/s2",
+            f"preferred={config.preferred_clearance_cm:g} cm, "
+            f"horizon={config.planning_horizon_cm:g} cm, "
+            f"beam={config.beam_width}, "
+            f"execute={config.execution_horizon_min_cm:g}-{config.execution_horizon_max_cm:g} cm, "
+            f"switch_margin={config.switch_margin:g}",
             flush=True,
         )
         summaries: list[dict[str, object]] = []
@@ -197,7 +180,6 @@ def main() -> None:
                 scenario_index,
                 sensor,
                 args.duration_s,
-                config.fixed_speed_cm_s,
                 config,
             )[0])
             print(
@@ -226,7 +208,7 @@ def main() -> None:
             "seed": args.seed,
             "scenarios": args.scenarios,
             "duration_s": args.duration_s,
-            "fixed_speed_cm_s": args.fixed_speed_cm_s,
+            "tunable_only": True,
             "best": best,
             "configurations": results,
         }, indent=2, ensure_ascii=False) + "\n",
@@ -234,10 +216,9 @@ def main() -> None:
     )
     with (args.output_dir / "sweep_results.csv").open("w", newline="", encoding="utf-8") as handle:
         columns = [
-            "configuration_id", "fixed_speed_cm_s", "mandatory_clearance_cm",
-            "desired_clearance_cm", "replanning_period_s", "planning_horizon_s",
-            "max_steering_rate_deg_s", "max_acceleration_cm_s2",
-            "max_deceleration_cm_s2", "score", "collisions", "collision_rate",
+            "configuration_id", "planning_horizon_cm", "beam_width",
+            "execution_horizon_min_cm", "execution_horizon_max_cm",
+            "switch_margin", "preferred_clearance_cm", "score", "collisions", "collision_rate",
             "maneuver_rate", "next_straight_rate", "route_progress_rate",
             "lap_rate",
             "correct_pass_side_rate", "no_safe_trajectory_cycles", "timing_p95_ms",

@@ -88,9 +88,23 @@ class FixedRules:
     vision_safe_distance_cm: float = float(_PHYSICAL.get("vision", {}).get("safe_distance_mm", 340.0)) / 10.0
     vision_safe_zone_top_ratio: float = float(_PHYSICAL.get("vision", {}).get("safe_zone_top_ratio", 0.68))
     horizontal_fov_deg: float = 70.4
+    perception_range_cm: float = 120.0
     forward_projection_cm: float = 30.0
+    # El beam search cubre 50 cm, siempre dentro del alcance de percepción.
+    prediction_horizon_cm: float = 50.0
     route_alignment_tolerance_deg: float = 8.0
     simulation_dt_s: float = 0.05
+    # Dinámica fijada por la configuración física actual del simulador. Estos
+    # valores no son knobs de optimización del planner.
+    max_speed_cm_s: float = 32.0
+    fixed_speed_cm_s: float = 24.0
+    max_steering_rate_deg_s: float = 90.0
+    max_acceleration_cm_s2: float = 45.0
+    max_deceleration_cm_s2: float = 70.0
+    # Clearance obligatorio: forma parte de la seguridad física/reglamentaria.
+    hard_front_clearance_cm: float = 6.0
+    hard_side_clearance_cm: float = 3.0
+    hard_rear_clearance_cm: float = 3.0
     red_pass_side: str = "right"
     green_pass_side: str = "left"
     outer_wall: tuple[float, float, float, float] = OUTER_WALL

@@ -1,4 +1,10 @@
-"""Parámetros ajustables del planner y carga desde JSON."""
+"""Parámetros que solo cambian la decisión de trayectoria.
+
+``planner_rules.py`` contiene medidas, dinámica, clearance hard y reglas
+fijas. Este módulo contiene búsqueda, compromiso, memoria, clearance preferred
+y pesos soft. ``PlannerTuning`` queda listo para ser modificado por un
+optimizador sin tocar la física del vehículo.
+"""
 
 from __future__ import annotations
 
@@ -9,116 +15,141 @@ from typing import Any
 
 try:
     from planner_rules import FIXED_RULES
+    from trajectory_scorer import DEFAULT_SCORE_WEIGHTS, TrajectoryScoreWeights
 except ImportError:
     from simulator.planner_rules import FIXED_RULES
+    from simulator.trajectory_scorer import DEFAULT_SCORE_WEIGHTS, TrajectoryScoreWeights
 
 
 DEFAULT_TUNING_FILE = Path(__file__).resolve().parents[1] / "config" / "simulator_planner_tuning.json"
 
 
 @dataclass(frozen=True)
-class SafetyMargins:
-    """Margenes geometricos por eje del rectangulo completo del carro."""
+class PreferredSafetyMargins:
+    """Clearance preferido: solo modifica la puntuación."""
 
-    hard_front_cm: float = 6.0
-    hard_side_cm: float = 3.0
-    hard_rear_cm: float = 3.0
-    preferred_front_cm: float = 12.0
-    preferred_side_cm: float = 5.0
-    preferred_rear_cm: float = 5.0
+    front_cm: float = 12.0
+    side_cm: float = 5.0
+    rear_cm: float = 5.0
 
-    def validate(self) -> "SafetyMargins":
-        values = (
-            self.hard_front_cm, self.hard_side_cm, self.hard_rear_cm,
-            self.preferred_front_cm, self.preferred_side_cm, self.preferred_rear_cm,
-        )
-        if any(value < 0.0 for value in values):
-            raise ValueError("Los margenes de seguridad no pueden ser negativos")
-        if self.preferred_front_cm < self.hard_front_cm:
-            raise ValueError("preferred_front_cm debe ser >= hard_front_cm")
-        if self.preferred_side_cm < self.hard_side_cm:
-            raise ValueError("preferred_side_cm debe ser >= hard_side_cm")
-        if self.preferred_rear_cm < self.hard_rear_cm:
-            raise ValueError("preferred_rear_cm debe ser >= hard_rear_cm")
+    def validate(self) -> "PreferredSafetyMargins":
+        if any(value < 0.0 for value in (self.front_cm, self.side_cm, self.rear_cm)):
+            raise ValueError("Los margenes preferred no pueden ser negativos")
         return self
 
 
 @dataclass(frozen=True)
 class PlannerTuning:
-    """Valores que se pueden calibrar sin cambiar las reglas de seguridad."""
+    """Únicamente parámetros TUNABLE que afectan la elección del trayecto."""
 
-    fixed_speed_cm_s: float = 24.0
-    max_steering_deg: float = FIXED_RULES.maximum_physical_steering_deg
-    safety_margins: SafetyMargins = SafetyMargins()
-    simulation_dt_s: float = FIXED_RULES.simulation_dt_s
+    planning_horizon_cm: float = FIXED_RULES.prediction_horizon_cm
+    prediction_segments: int = 3
+    beam_width: int = 4
+    # Perfiles históricos de steering que se conservan porque el beam actual
+    # los usa como magnitudes reales de rueda, no como fracciones aleatorias.
+    steering_fractions: tuple[float, ...] = (0.5, 1.0)
+    turn_angles_deg: tuple[float, ...] = (15.0, 10.0, 5.0, 0.0)
+    counter_steer_angles_deg: tuple[float, ...] = (15.0, 10.0, 5.0, 0.0)
+    reverse_probe_distances_cm: tuple[float, ...] = (2.0, 5.0, 10.0)
     replanning_period_s: float = 0.20
     planning_horizon_s: float = 2.0
     preview_horizon_s: float = 5.0
+    execution_horizon_min_cm: float = 6.0
+    execution_horizon_max_cm: float = 15.0
+    switch_margin: float = 8.0
     memory_timeout_s: float = 2.0
+    preferred_safety_margins: PreferredSafetyMargins = PreferredSafetyMargins()
+    # Pueden cambiar la decisión si se agotan; no son redundantes del beam.
+    planning_budget_mode: str = "time"
     max_candidates: int = 256
     max_planning_time_ms: float = 20.0
-    max_steering_rate_deg_s: float = 90.0
-    max_acceleration_cm_s2: float = 45.0
-    max_deceleration_cm_s2: float = 70.0
-    turn_angles_deg: tuple[float, ...] = (15.0, 10.0, 5.0, 0.0)
-    counter_steer_angles_deg: tuple[float, ...] = (15.0, 10.0, 5.0, 0.0)
+    diagnostic_level: str = "full"
+    score_weights: TrajectoryScoreWeights = DEFAULT_SCORE_WEIGHTS
+
+    # Modos operativos explícitos de pruebas/diagnóstico; no se serializan
+    # como tuning optimizable.
+    allow_physical_collisions: bool = False
+    disable_hard_safety_margins: bool = False
+
     def validate(self) -> "PlannerTuning":
-        self.safety_margins.validate()
-        if not 0.0 < self.fixed_speed_cm_s <= 32.0:
-            raise ValueError("fixed_speed_cm_s debe estar entre 0 y 32")
-        if not 0.0 < self.max_steering_deg < 89.0:
-            raise ValueError("max_steering_deg inválido")
-        if self.replanning_period_s <= 0.0 or self.planning_horizon_s <= 0.0:
-            raise ValueError("Los periodos del planner deben ser positivos")
-        if self.preview_horizon_s < self.planning_horizon_s:
-            raise ValueError("preview_horizon_s debe ser >= planning_horizon_s")
-        if self.memory_timeout_s < 0.0 or self.max_candidates <= 0 or self.max_planning_time_ms <= 0.0:
-            raise ValueError("Presupuesto o memoria inválidos")
-        if self.max_steering_rate_deg_s <= 0.0 or self.max_acceleration_cm_s2 <= 0.0 or self.max_deceleration_cm_s2 <= 0.0:
-            raise ValueError("Límites dinámicos inválidos")
-        if not self.turn_angles_deg or not self.counter_steer_angles_deg:
-            raise ValueError("Debe existir al menos un ángulo candidato")
+        self.preferred_safety_margins.validate()
+        if self.planning_horizon_cm <= 0.0:
+            raise ValueError("planning_horizon_cm debe ser positivo")
+        if self.prediction_segments <= 0 or self.beam_width <= 0:
+            raise ValueError("prediction_segments y beam_width deben ser positivos")
+        if not self.steering_fractions or any(
+            fraction <= 0.0 or fraction > 1.0
+            for fraction in self.steering_fractions
+        ):
+            raise ValueError("steering_fractions debe estar entre 0 y 1")
+        for name, angles in (
+            ("turn_angles_deg", self.turn_angles_deg),
+            ("counter_steer_angles_deg", self.counter_steer_angles_deg),
+        ):
+            if not angles or any(angle < 0.0 for angle in angles):
+                raise ValueError(f"{name} debe contener ángulos no negativos")
+            if any(angle > FIXED_RULES.maximum_physical_steering_deg for angle in angles):
+                raise ValueError(f"{name} supera el steering físico máximo")
+        if not self.reverse_probe_distances_cm or any(
+            distance <= 0.0 for distance in self.reverse_probe_distances_cm
+        ):
+            raise ValueError("reverse_probe_distances_cm debe contener distancias positivas")
+        if self.replanning_period_s <= 0.0:
+            raise ValueError("replanning_period_s debe ser positivo")
+        if self.planning_horizon_s <= 0.0 or self.preview_horizon_s < self.planning_horizon_s:
+            raise ValueError("Los horizontes temporales del planner son inválidos")
+        if self.execution_horizon_min_cm <= 0.0:
+            raise ValueError("execution_horizon_min_cm debe ser positivo")
+        if self.execution_horizon_max_cm < self.execution_horizon_min_cm:
+            raise ValueError("execution_horizon_max_cm debe ser >= execution_horizon_min_cm")
+        if self.switch_margin < 0.0 or self.memory_timeout_s < 0.0:
+            raise ValueError("switch_margin y memory_timeout_s no pueden ser negativos")
+        if self.diagnostic_level not in {"full", "summary", "off"}:
+            raise ValueError("diagnostic_level debe ser 'full', 'summary' u 'off'")
+        if self.max_candidates <= 0 or self.max_planning_time_ms <= 0.0:
+            raise ValueError("Presupuesto de planificación inválido")
+        if self.planning_budget_mode not in {"time", "candidate_count"}:
+            raise ValueError("planning_budget_mode debe ser 'time' o 'candidate_count'")
         return self
 
     @property
-    def mandatory_clearance_cm(self) -> float:
-        """Alias legacy: representa el mayor margen hard para reportes antiguos."""
+    def preferred_clearance_cm(self) -> float:
+        """Alias de reporte; no es un parámetro almacenado adicional."""
         return max(
-            self.safety_margins.hard_front_cm,
-            self.safety_margins.hard_side_cm,
-            self.safety_margins.hard_rear_cm,
+            self.preferred_safety_margins.front_cm,
+            self.preferred_safety_margins.side_cm,
+            self.preferred_safety_margins.rear_cm,
         )
 
     @property
-    def desired_clearance_cm(self) -> float:
-        """Alias legacy: representa el mayor margen preferred para reportes antiguos."""
+    def mandatory_clearance_cm(self) -> float:
+        """Alias de reporte para la mayor regla hard fija."""
         return max(
-            self.safety_margins.preferred_front_cm,
-            self.safety_margins.preferred_side_cm,
-            self.safety_margins.preferred_rear_cm,
+            FIXED_RULES.hard_front_clearance_cm,
+            FIXED_RULES.hard_side_clearance_cm,
+            FIXED_RULES.hard_rear_clearance_cm,
         )
 
     def with_overrides(self, **values: Any) -> "PlannerTuning":
-        legacy_hard = values.pop("mandatory_clearance_cm", None)
-        legacy_preferred = values.pop("desired_clearance_cm", None)
-        margins = self.safety_margins
-        if legacy_hard is not None:
-            legacy_hard = float(legacy_hard)
-            margins = replace(
-                margins,
-                hard_front_cm=legacy_hard,
-                hard_side_cm=legacy_hard,
-                hard_rear_cm=legacy_hard,
+        """Devuelve una variante validada para un experimento.
+
+        Los nombres físicos antiguos se rechazan para evitar que un sweep
+        vuelva a optimizar hardware por accidente.
+        """
+        forbidden = {
+            "fixed_speed_cm_s", "max_speed_cm_s", "max_steering_deg",
+            "max_steering_rate_deg_s", "max_acceleration_cm_s2",
+            "max_deceleration_cm_s2", "simulation_dt_s",
+            "mandatory_clearance_cm",
+            "desired_clearance_cm", "safety_margins",
+        }
+        invalid = sorted(forbidden.intersection(values))
+        if invalid:
+            raise ValueError(
+                "Parámetros FIXED no se pueden modificar desde PlannerTuning: "
+                + ", ".join(invalid)
             )
-        if legacy_preferred is not None:
-            legacy_preferred = float(legacy_preferred)
-            margins = replace(
-                margins,
-                preferred_front_cm=legacy_preferred,
-                preferred_side_cm=legacy_preferred,
-                preferred_rear_cm=legacy_preferred,
-            )
-        return replace(self, safety_margins=margins, **values).validate()
+        return replace(self, **values).validate()
 
 
 def _tuple_values(raw: Any, name: str) -> tuple[float, ...]:
@@ -128,91 +159,70 @@ def _tuple_values(raw: Any, name: str) -> tuple[float, ...]:
 
 
 def load_planner_tuning(path: str | Path | None = None) -> PlannerTuning:
-    """Carga tuning editable; si no existe, usa los defaults del simulador."""
+    """Carga únicamente claves TUNABLE del JSON indicado."""
     tuning_path = Path(path) if path else DEFAULT_TUNING_FILE
     if not tuning_path.exists():
         return PlannerTuning().validate()
     payload = json.loads(tuning_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("El archivo de tuning debe contener un objeto JSON")
-    # Las claves privadas permiten documentar el JSON sin usar comentarios
-    # no estándar como // o /* */. No forman parte de PlannerTuning.
+
     values = {
         key: value for key, value in payload.items()
         if not str(key).startswith("_")
     }
-    # Los campos retirados se ignoran para que un archivo anterior siga
-    # siendo legible, pero ya no pueden controlar la duracion de una fase.
+    # Claves retiradas: se ignoran, nunca vuelven a controlar decisiones.
     for key in (
-        "phase_durations_s", "pass_hold_steering_fraction",
-        "pass_hold_residual_fraction", "stabilizing_pass_steering_deg",
-        "stabilizing_counter_steering_deg", "stabilizing_steering_deg",
+        "fixed_speed_cm_s", "max_steering_deg", "simulation_dt_s",
+        "max_steering_rate_deg_s", "max_acceleration_cm_s2",
+        "max_deceleration_cm_s2",
+        "mandatory_clearance_cm", "desired_clearance_cm", "safety_margins",
+        "phase_transitions",
     ):
         values.pop(key, None)
-    legacy_hard = values.pop("mandatory_clearance_cm", None)
-    legacy_preferred = values.pop("desired_clearance_cm", None)
-    raw_margins = values.get("safety_margins")
-    if isinstance(raw_margins, dict):
-        # Acepta la forma plana guardada por versiones anteriores y la forma
-        # agrupada que se usa en la documentacion:
-        # {"hard": {"front_cm": ...}, "preferred": {...}}.
-        margin_values: dict[str, Any] = {}
-        for group, prefix in (("hard", "hard"), ("preferred", "preferred")):
-            nested = raw_margins.get(group, {})
-            if nested is not None and not isinstance(nested, dict):
-                raise ValueError(f"safety_margins.{group} debe ser un objeto JSON")
-            for axis in ("front", "side", "rear"):
-                flat_key = f"{prefix}_{axis}_cm"
-                if flat_key in raw_margins:
-                    margin_values[flat_key] = raw_margins[flat_key]
-                elif axis + "_cm" in nested:
-                    margin_values[flat_key] = nested[axis + "_cm"]
-        values["safety_margins"] = SafetyMargins(**margin_values).validate()
-    elif raw_margins is not None:
-        raise ValueError("safety_margins debe ser un objeto JSON")
-    margins = values.get("safety_margins", SafetyMargins())
-    if legacy_hard is not None:
-        margins = replace(
-            margins,
-            hard_front_cm=float(legacy_hard),
-            hard_side_cm=float(legacy_hard),
-            hard_rear_cm=float(legacy_hard),
-        )
-    if legacy_preferred is not None:
-        margins = replace(
-            margins,
-            preferred_front_cm=float(legacy_preferred),
-            preferred_side_cm=float(legacy_preferred),
-            preferred_rear_cm=float(legacy_preferred),
-        )
-    values["safety_margins"] = margins
+
+    raw_preferred = values.pop("preferred_safety_margins", None)
+    if isinstance(raw_preferred, dict):
+        nested = raw_preferred.get("preferred", raw_preferred)
+        if not isinstance(nested, dict):
+            raise ValueError("preferred_safety_margins debe ser un objeto JSON")
+        values["preferred_safety_margins"] = PreferredSafetyMargins(
+            front_cm=float(nested.get("front_cm", 12.0)),
+            side_cm=float(nested.get("side_cm", 5.0)),
+            rear_cm=float(nested.get("rear_cm", 5.0)),
+        ).validate()
+    elif raw_preferred is not None:
+        raise ValueError("preferred_safety_margins debe ser un objeto JSON")
+
+    raw_weights = values.get("score_weights")
+    if isinstance(raw_weights, dict):
+        values["score_weights"] = TrajectoryScoreWeights(**{
+            key: float(value)
+            for key, value in raw_weights.items()
+            if key in TrajectoryScoreWeights.__dataclass_fields__
+        })
+    elif raw_weights is not None:
+        raise ValueError("score_weights debe ser un objeto JSON")
+
     known = {item.name for item in fields(PlannerTuning)}
     values = {key: value for key, value in values.items() if key in known}
-    for key in ("turn_angles_deg", "counter_steer_angles_deg"):
+    for key in (
+        "steering_fractions", "turn_angles_deg", "counter_steer_angles_deg",
+        "reverse_probe_distances_cm",
+    ):
         if key in values:
             values[key] = _tuple_values(values[key], key)
     return PlannerTuning(**values).validate()
 
 
 def save_planner_tuning(tuning: PlannerTuning, path: str | Path | None = None) -> Path:
+    """Guarda solo la configuración TUNABLE y conserva comentarios JSON."""
     tuning.validate()
     tuning_path = Path(path) if path else DEFAULT_TUNING_FILE
     tuning_path.parent.mkdir(parents=True, exist_ok=True)
     payload = asdict(tuning)
-    margins = payload.get("safety_margins")
-    if isinstance(margins, dict):
-        payload["safety_margins"] = {
-            "hard": {
-                "front_cm": margins["hard_front_cm"],
-                "side_cm": margins["hard_side_cm"],
-                "rear_cm": margins["hard_rear_cm"],
-            },
-            "preferred": {
-                "front_cm": margins["preferred_front_cm"],
-                "side_cm": margins["preferred_side_cm"],
-                "rear_cm": margins["preferred_rear_cm"],
-            },
-        }
+    payload.pop("allow_physical_collisions", None)
+    payload.pop("disable_hard_safety_margins", None)
     if tuning_path.exists():
         try:
             previous = json.loads(tuning_path.read_text(encoding="utf-8"))

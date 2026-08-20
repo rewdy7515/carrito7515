@@ -57,8 +57,9 @@ se evalúan contra el límite geométrico, sin asignarles grosor ficticio.
   colisión: el muro se representa como el cuadrado de 100 cm definido por los
   picos, sin inventar un radio.
 - Espesor de muros, calibración de velocidad, holgura mecánica y margen de
-  seguridad validado físicamente. El margen inicial se elige con
-  `--safety-margin-cm`; no es una medida oficial.
+  seguridad validado físicamente. El clearance hard inicial está fijado en
+  `planner_rules.py`; `--disable-safety-margins` solo existe como diagnóstico
+  explícito del simulador.
 
 ## Estructura
 
@@ -82,29 +83,75 @@ config/simulator_manual_runs/                # recorridos manuales JSON + CSV
 config/simulator_planner_tuning.json         # parámetros editables del planner
 ```
 
+### Ajuste y diagnóstico del planner
+
+Los parámetros TUNABLE están centralizados en
+`config/simulator_planner_tuning.json` y se cargan mediante
+`planner_tuning.py`: horizonte geométrico, segmentos, `beam_width`, fracciones
+de steering, ejecución, `switch_margin`, memoria, preferred clearance,
+distancias de prueba de reverse, presupuesto de búsqueda y pesos de
+`trajectory_scorer.py`. Las dimensiones,
+dinámica, `simulation_dt_s`, clearance hard, colisiones y reglas de paso están
+únicamente en `planner_rules.py`.
+
+`diagnostic_level` controla el coste de los datos de depuración:
+
+- `full`: conserva footprints y puntos para la visualización de Pygame.
+- `summary`: conserva únicamente métricas y razones resumidas para los tests.
+- `off`: conserva solo lo necesario para seleccionar y ejecutar la trayectoria,
+  recomendado para el runtime del robot.
+
+Cada `PlannerResult.diagnostics` incluye `simulation_calls`,
+`segment_simulations` y `clearance_evaluations`. El beam incremental simula
+cada nuevo segmento una sola vez, reutiliza la pose final y las métricas
+acumuladas, y no vuelve a simular los candidatos finales. Estos contadores,
+junto con el tiempo de `plan()`, permiten comparar rendimiento sin reducir el
+horizonte ni el número de ramas.
+
 El modo automático usa tres capas:
 
 - `geometric_planner.py`: dataclasses, geometría, cinemática Ackermann,
   primitivas, simulación swept, validación y scoring.
 - `autonomous_controller.py`: interfaz pura `PlannerInput -> PlannerResult` y
-  commitment/hysteresis. No importa Pygame ni hardware.
+  persistencia del objetivo activo. No importa Pygame ni hardware.
 - `simulator_adapter.py`: convierte pose, FOV, obstáculos, muros y dirección
   detectada por las líneas en un `PlannerInput`, y aplica el `ControlCommand`
   al vehículo simulado.
 
 Las primitivas disponibles son `STRAIGHT`, `REVERSE`, `ARC_LEFT` y
-`ARC_RIGHT`. Si la proyección recta completa es segura, el planner no genera
-maniobras innecesarias. Si está bloqueada, construye perfiles
-`CONSERVATIVE`, `NOMINAL` y `TIGHT` con radios derivados de las medidas
-físicas. Cada candidato se integra en pasos de `simulation_dt_s`; en cada pose
-se valida el rectángulo rotado completo contra obstáculos, muros, límite de
-pista y clearance obligatorio.
+`ARC_RIGHT`. En cada ciclo la única cadena de decisión es:
 
-El planner solo utiliza `visible_obstacles` y `visible_walls` entregados por
-la capa de percepción. El sentido `CLOCKWISE` o `COUNTERCLOCKWISE` también
-llega en `PlannerInput`; el controller nunca procesa imágenes ni colores de
-líneas. Los colores rojo/verde de obstáculos sí se conservan como una propiedad
-semántica ya detectada para exigir rojo por la derecha y verde por la izquierda.
+```text
+generar forward → simular → validar restricciones duras → score → seleccionar
+```
+
+Los forward se generan con un beam search Ackermann de tres niveles de unos
+16.7 cm: `STRAIGHT`, arco izquierdo suave/fuerte y arco derecho suave/fuerte.
+Se conservan como máximo cuatro ramas por nivel. Al finalizar, cada candidato
+es una trayectoria completa de 50 cm, dentro del alcance de predicción y de la
+percepción configurada. Se simula y puntúa la trayectoria completa; no se
+seleccionan tramos aislados. En cada pose se valida el rectángulo rotado
+completo contra obstáculos, muros, límite de pista y clearance hard. La
+proyección frontal de 30 cm es solo diagnóstico: nunca sustituye ni invalida
+un candidato completo.
+
+Un candidato que ya demostró por simulación que no colisiona, permanece dentro
+de pista, respeta Ackermann y pasa el obstáculo por el lado correcto no puede
+ser cancelado por una heurística posterior. `GREEN -> LEFT` y `RED -> RIGHT`
+son la única diferencia de conducción por color; `preferred` solo afecta el
+score. `REVERSE` se prueba únicamente si ningún forward pasó la validación y
+se elige el retroceso exitoso más corto.
+
+El planner utiliza todos los obstáculos entregados por la percepción en
+`visible_obstacles` y conserva en `tracked_obstacles` los que ya fueron
+detectados aunque abandonen temporalmente el FOV. Todos participan en la
+colisión; el más cercano que aún está por delante es el objetivo prioritario.
+Cuando el footprint completo confirma `PASSED` por el lado correcto, el
+controller libera ese objetivo y selecciona el siguiente obstáculo pendiente.
+El sentido `CLOCKWISE` o `COUNTERCLOCKWISE` también llega en `PlannerInput`;
+el controller nunca procesa imágenes ni colores de líneas. Los colores
+rojo/verde de obstáculos sí se conservan como una propiedad semántica ya
+detectada para exigir rojo por la derecha y verde por la izquierda.
 
 Los límites asimétricos se toman de `config/physical_measurements.json`:
 radio mínimo derecho de 32.2 cm, izquierdo de 43.0 cm y ángulos medidos de cada
@@ -308,18 +355,27 @@ integrarlas en el modelo de bicicleta.
 `geometric_planner.py` no importa Pygame y expone `PlannerInput` y
 `ControlCommand`. Pygame solo recoge entradas, construye `PlannerInput`, aplica
 el `ControlCommand`, renderiza y muestra diagnosticos; no sustituye el
-steering decidido por el planner. Usa un `simulation_dt` de `0.05 s`, un periodo de
-replanificación independiente de `0.20 s`, un horizonte de validación de
-`2 s` y un rango visual configurable de `5 s` (`--preview-horizon-s`). Las
+steering decidido por el planner. Usa el `simulation_dt_s` fijo de `0.05 s` y
+un horizonte geométrico TUNABLE de `50 cm`. Las
 líneas extendidas se dibujan tenue y no convierten una previsión en una
 trayectoria segura. También aplica aceleración y desaceleración limitadas, y
 un máximo de `256` candidatos o `20 ms` por ciclo. La magnitud de velocidad
-objetivo de recorrido es única y positiva (`fixed_speed_cm_s`, por defecto
-`24 cm/s`) en las cuatro fases y en los cambios de recta. Las únicas
+objetivo de recorrido es única y positiva (`fixed_speed_cm_s`, fijada en
+`planner_rules.py`, actualmente `24 cm/s`) en las cuatro fases y en los
+cambios de recta. Las únicas
 excepciones son `BRAKE` (cero) y `REVERSE_10CM` (negativa) dentro de la
 recuperación de seguridad. El punto de
 referencia es el centro geométrico; los offsets simétricos de `7.4 cm` a cada
 eje son una hipótesis del simulador hasta contar con una medición física.
+
+El commitment es flexible. El controller conserva el resto del plan actual,
+pero en cada replanning genera nuevos candidatos completos de `50 cm` desde la
+pose actual y los compara contra ese resto. Solo cambia si el plan actual deja
+de ser seguro o si el nuevo score supera al actual por `switch_margin` (por
+defecto `8.0`). La ejecución entre comparaciones se adapta entre `6` y `15 cm`
+mediante `execution_horizon_min_cm` y `execution_horizon_max_cm`; estos valores
+y `planning_horizon_cm` se pueden calibrar en
+`config/simulator_planner_tuning.json`.
 
 Cuando hay un obstáculo cerca de un muro, `minimum_corridor_clearance_cm` es la
 holgura mínima simultánea entre la carrocería completa, cualquier muro y
@@ -338,19 +394,32 @@ python3 -m unittest discover -s simulator -p 'test_*.py' -v
 ```
 
 El runner usa exactamente `track_config.py`, igual que Pygame: misma salida,
-misma ruta, mismo muro y mismos 24 asientos. Puede generar obstáculos en todos
-los asientos válidos y no descarta un obstáculo verde en una recta vertical por
-considerarlo "imposible"; todo objeto entregado por el sensor debe ser resuelto
-por la regla fija `red -> derecha` / `green -> izquierda`. El tiempo por defecto
-es `20 s`, suficiente para alcanzar la siguiente recta. Para validar el objetivo
-actual de una vuelta completa usa `--duration-s 60` o más. El resumen incluye
-`straight_progress`, `lap_completed`, `minimum_corridor_clearance_cm`,
-`scenarios_reaching_next_straight` y
+misma ruta, mismo muro y mismos 24 asientos. Tiene tres modos: `1` es pista sin
+obstáculos, `2` es pista con obstáculos y `3` es pista con obstáculos más
+`parking wall`; el modo `3` está reconocido pero inhabilitado hasta definir su
+configuración. El modo predeterminado es `2` y puede elegirse con `--mode 1` o
+`--mode 2`. Puede generar obstáculos en todos los asientos válidos y no descarta
+un obstáculo verde en una recta vertical por considerarlo "imposible"; todo
+objeto entregado por el sensor debe ser resuelto por la regla fija `red ->
+derecha` / `green -> izquierda`. El objetivo fijo son `3` vueltas de `4` rectas:
+`target_straights` es `12` y `completed` solo es `true` cuando se superan las 12
+en el orden correcto. La duración predeterminada es `180 s`; una duración menor
+puede terminar con `completed: false`. El resumen incluye
+`straights_completed`, `target_straights`, `laps_completed`, `completed`,
+`minimum_corridor_clearance_cm`, `scenarios_reaching_next_straight` y
 `route_progress_valid`, además de guardar resultados reproducibles en JSON/CSV
+
+En `mode 2`, cada escenario se genera así: una de las cuatro rectas recibe un
+único obstáculo en el asiento central de la fila exterior; las otras tres
+reciben aleatoriamente uno o dos obstáculos, con posiciones y colores elegidos
+por configuración local. Las tres configuraciones locales no se repiten dentro
+del escenario. La seed fija la recta, posiciones y colores, y los obstáculos no
+cambian durante las tres vueltas.
 con P50, P90, P95, P99 y máximo del tiempo de planificación:
 
 ```bash
 python3 simulator/planner_test_runner.py \
+  --mode 2 \
   --scenarios 100 \
   --seed 20260815 \
   --output-dir /tmp/wro-planner-results
@@ -366,21 +435,37 @@ python3 simulator/planner_test_runner.py \
   --dropout-probability 0.10
 ```
 
+Para revisar en Pygame un escenario concreto del runner del modo 2, usa el
+mismo índice y la misma seed que aparecen en la ejecución. El runner usa
+`seed + scenario_index`; por ejemplo, para los cinco escenarios iniciados con
+`20260815`:
+
+```bash
+.venv/bin/python simulator/wro_simulator.py \
+  --scenario-mode 2 \
+  --scenario-index 3 \
+  --scenario-seed 20260818
+```
+
+Después presiona `A` para iniciar AUTO. Los índices `0` a `4` corresponden a
+los escenarios del runner y Pygame reutiliza la misma generación determinista.
+
 Para comparar parámetros de forma reproducible usa el barrido separado:
 
 ```bash
 python3 simulator/planner_parameter_sweep.py \
   --scenarios 20 \
   --seed 20260815 \
-  --fixed-speed-cm-s 18 \
+  --preferred-clearance-cm 13,15 \
+  --planning-horizon-cm 50 \
+  --beam-width 4 \
   --output-dir /tmp/wro-planner-sweep
 ```
 
-El barrido prueba combinaciones de margen obligatorio/deseado, periodo de
-replanificación, horizonte de validación y velocidad de cambio del steering.
-También puede comparar varias velocidades fijas con `--fixed-speed-cm-s 15,18,21`.
-La aceleración y la desaceleración también aceptan listas con
-`--acceleration-cm-s2` y `--deceleration-cm-s2`.
+El barrido prueba únicamente combinaciones TUNABLE: preferred clearance,
+horizonte geométrico, beam y horizonte de ejecución. La velocidad, aceleración,
+desaceleración, steering rate, `simulation_dt_s` y clearance hard no se pueden
+variar desde este barrido.
 Incluye `lap_rate` en la puntuación y guarda `sweep_results.json`,
 `sweep_results.csv` y los resúmenes por escenario.
 La selección es lexicográfica en la práctica: primero se penalizan las
@@ -400,11 +485,12 @@ allí los ángulos, márgenes y límites dinámicos sin tocar
 
 ```json
 {
-  "turn_angles_deg": [15, 10, 5, 0],
-  "counter_steer_angles_deg": [15, 10, 5, 0],
-  "safety_margins": {
-    "hard": {"front_cm": 6, "side_cm": 3, "rear_cm": 3},
-    "preferred": {"front_cm": 12, "side_cm": 5, "rear_cm": 5}
+  "planning_horizon_cm": 50,
+  "steering_fractions": [0.5, 1.0],
+  "preferred_safety_margins": {
+    "front_cm": 12,
+    "side_cm": 5,
+    "rear_cm": 5
   }
 }
 ```
@@ -425,23 +511,21 @@ misma definición de asientos, colores, dimensiones y salida.
 ### Calibración recomendada desde cero
 
 1. Primero calibra sin obstáculos y cambia una variable a la vez. Por ejemplo,
-   prueba la velocidad fija y el límite real de dirección en Pygame:
+   usa los valores físicos fijos y calibra únicamente el comportamiento de
+   búsqueda en Pygame:
 
    ```bash
    .venv/bin/python simulator/wro_simulator.py \
-     --fixed-speed-cm-s 18 \
-     --max-steering-deg 20.7 \
-     --max-steering-rate-deg-s 90 \
-     --replanning-period-s 0.20
+     --planner-config config/simulator_planner_tuning.json
    ```
 
 2. Después valida obstáculos con una sola configuración base en el runner:
 
    ```bash
    .venv/bin/python simulator/planner_test_runner.py \
+     --mode 2 \
      --scenarios 20 \
      --duration-s 60 \
-     --fixed-speed-cm-s 18 \
      --seed 20260815 \
      --output-dir /tmp/wro-base
    ```
@@ -454,14 +538,12 @@ misma definición de asientos, colores, dimensiones y salida.
    .venv/bin/python simulator/planner_parameter_sweep.py \
      --scenarios 20 \
      --duration-s 60 \
-     --fixed-speed-cm-s 15,18,21 \
-     --mandatory-clearance-cm 8,10,12 \
-     --desired-clearance-cm 13,15,18 \
-     --replanning-period-s 0.15,0.20,0.25 \
-     --planning-horizon-s 2,3 \
-     --steering-rate-deg-s 75,90,110 \
-     --acceleration-cm-s2 35,45 \
-     --deceleration-cm-s2 60,70 \
+     --preferred-clearance-cm 13,15,18 \
+     --planning-horizon-cm 50 \
+     --beam-width 4 \
+     --execution-horizon-min-cm 6,10 \
+     --execution-horizon-max-cm 15,20 \
+     --switch-margin 8,12 \
      --seed 20260815 \
      --output-dir /tmp/wro-sweep
    ```

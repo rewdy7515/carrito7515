@@ -3,20 +3,48 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Sequence
 
 try:
     from planner_rules import FIXED_RULES
     from planner_tuning import PlannerTuning
+    from trajectory_scorer import score_trajectory
+    from local_frame import LocalSide, footprint_side, right_vector
 except ImportError:
     from simulator.planner_rules import FIXED_RULES
     from simulator.planner_tuning import PlannerTuning
+    from simulator.trajectory_scorer import score_trajectory
+    from simulator.local_frame import LocalSide, footprint_side, right_vector
 
 Point = tuple[float, float]
 Polygon = tuple[Point, ...]
 NUMERICAL_CLEARANCE_TOLERANCE_CM = 0.15
+
+
+@dataclass(frozen=True)
+class ClearanceResult:
+    """Resultado único de colisión y distancias para una pose."""
+
+    collision: bool
+    collision_type: str | None
+    object_id: str | None
+    min_clearance_cm: float
+    obstacle_clearance_cm: float
+    wall_clearance_cm: float
+
+
+@dataclass(frozen=True)
+class GeometryCache:
+    """Geometrías estáticas compartidas por todos los candidatos de un ciclo."""
+
+    obstacle_polygons: tuple[tuple[str, Polygon], ...]
+    obstacle_geometry: tuple[tuple[str, Polygon, tuple[tuple[Point, Point], ...], tuple[Point, ...]], ...]
+    wall_segments: tuple[tuple[str, Point, Point, float], ...]
+    boundary_edges: tuple[tuple[Point, Point], ...]
+    boundary_polygon: Polygon | None = None
+    active_target_polygon: Polygon | None = None
 
 
 class TrackDirection(str, Enum):
@@ -60,11 +88,11 @@ class VehicleGeometry:
     right_turn_right_wheel_deg: float = FIXED_RULES.right_turn_right_wheel_deg
     left_turn_left_wheel_deg: float = FIXED_RULES.left_turn_left_wheel_deg
     left_turn_right_wheel_deg: float = FIXED_RULES.left_turn_right_wheel_deg
-    max_speed_cm_s: float = 32.0
-    fixed_speed_cm_s: float = 24.0
-    max_acceleration_cm_s2: float = 45.0
-    max_deceleration_cm_s2: float = 70.0
-    max_steering_rate_deg_s: float = 90.0
+    max_speed_cm_s: float = FIXED_RULES.max_speed_cm_s
+    fixed_speed_cm_s: float = FIXED_RULES.fixed_speed_cm_s
+    max_acceleration_cm_s2: float = FIXED_RULES.max_acceleration_cm_s2
+    max_deceleration_cm_s2: float = FIXED_RULES.max_deceleration_cm_s2
+    max_steering_rate_deg_s: float = FIXED_RULES.max_steering_rate_deg_s
 
     @property
     def max_right_steering_deg(self) -> float:
@@ -129,6 +157,9 @@ class VisibleObstacle:
     length_cm: float
     color: str = "unknown"
     heading_rad: float = 0.0
+    # El objeto permanece en la geometría de colisión después de superarlo,
+    # pero ya no debe iniciar otra maniobra reglamentaria durante esa vuelta.
+    already_passed: bool = False
 
     def polygon(self) -> Polygon:
         return rotated_rectangle((self.x_cm, self.y_cm), self.heading_rad, self.length_cm, self.width_cm)
@@ -151,6 +182,16 @@ class PlannerInput:
     track_direction: TrackDirection | None = None
     desired_heading_rad: float | None = None
     timestamp_s: float = 0.0
+    # Ruta longitudinal ordenada por percepción/ruta. Es opcional para que
+    # el planner también pueda funcionar solo con FOV y muros.
+    route_centerline: tuple[Point, ...] = ()
+    # Objetos detectados anteriormente que siguen siendo relevantes para la
+    # geometría. ``visible_obstacles`` siempre tiene prioridad si se repite
+    # el mismo object_id.
+    tracked_obstacles: tuple[VisibleObstacle, ...] = ()
+    # Identificador fijado por AutonomousController mientras el obstáculo no
+    # haya sido confirmado como PASSED.
+    active_target_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -177,6 +218,7 @@ class TrajectoryPoint:
     primitive_index: int
     traveled_cm: float
     footprint: Polygon
+    clearance: ClearanceResult | None = None
 
 
 @dataclass
@@ -198,13 +240,46 @@ class CandidateTrajectory:
     length_cm: float = 0.0
     correct_pass_side: bool = True
     rejection_reason: str | None = None
+    diagnostic_rejection_reason: str | None = None
+    collision_type: str | None = None
+    collision_object_id: str | None = None
+    target_obstacle_id: str | None = None
+    desired_pass_side: LocalSide | None = None
+    current_lateral_offset_cm: float | None = None
+    target_lateral_offset_cm: float | None = None
+    lateral_error_cm: float | None = None
+    pass_side_feasible: bool | None = None
+    recovery_probe_valid: bool = False
     score: float = -math.inf
+    hard_failure: bool = False
+    geometry_cache: GeometryCache | None = None
+    final_state: VehicleState | None = None
+    final_footprint: Polygon | None = None
+    closest_target_footprint: Polygon | None = None
+    closest_target_distance_cm: float = math.inf
 
 
 @dataclass(frozen=True)
 class ControlCommand:
     target_speed_cm_s: float
     steering_angle_deg: float
+
+
+@dataclass(frozen=True)
+class PassTarget:
+    """Objetivo lateral reglamentario respecto a la recta del obstáculo.
+
+    ``side`` expresa la regla RED/GREEN. ``target_lateral_offset_cm`` es la
+    frontera lateral mínima que debe superar el centro del carro para dejar
+    el clearance hard entre ambos footprints. No es un punto exacto.
+    """
+
+    obstacle_id: str
+    side: LocalSide
+    tangent_rad: float
+    forward_vector: Point
+    right_vector: Point
+    target_lateral_offset_cm: float
 
 
 @dataclass
@@ -227,6 +302,37 @@ class PlannerDiagnostics:
     reason: str = ""
     budget_exhausted: bool = False
     budget_reason: str | None = None
+    forward_candidates_generated: int = 0
+    forward_candidates_valid: int = 0
+    reverse_candidates_generated: int = 0
+    reverse_candidates_valid: int = 0
+    rejection_reasons: dict[str, int] = field(default_factory=dict)
+    forward_rejections: dict[str, int] = field(default_factory=dict)
+    reverse_rejections: dict[str, int] = field(default_factory=dict)
+    candidate_diagnostics: list[dict[str, object]] = field(default_factory=list)
+    representative_rejected_candidate: dict[str, object] | None = None
+    reverse_recovery_attempted: bool = False
+    reverse_distance_cm: float = 0.0
+    target_obstacle_id: str | None = None
+    desired_pass_side: str | None = None
+    current_lateral_offset_cm: float | None = None
+    target_lateral_offset_cm: float | None = None
+    lateral_error_cm: float | None = None
+    pass_side_feasible: bool | None = None
+    active_target_id: str | None = None
+    no_safe_reason: str | None = None
+    no_safe_detail: str | None = None
+    commitment_mode: str = "flexible"
+    current_plan_score: float = -math.inf
+    new_plan_score: float = -math.inf
+    switch_margin: float = 0.0
+    switched_plan: bool = False
+    execution_horizon_cm: float = 0.0
+    simulation_calls: int = 0
+    segment_simulations: int = 0
+    clearance_evaluations: int = 0
+    fast_path: bool = False
+    diagnostic_level: str = "full"
 
 
 @dataclass
@@ -260,6 +366,34 @@ def rectangle_polygon(rect: tuple[float, float, float, float]) -> Polygon:
 
 def _axes(polygon: Sequence[Point]) -> list[Point]:
     return [(-(b[1]-a[1]), b[0]-a[0]) for a, b in zip(polygon, polygon[1:] + polygon[:1])]
+
+
+def _polygon_edges(polygon: Sequence[Point]) -> tuple[tuple[Point, Point], ...]:
+    return tuple(zip(polygon, polygon[1:] + polygon[:1]))
+
+
+def _polygon_distance_prepared(
+    first: Sequence[Point], first_edges: Sequence[tuple[Point, Point]],
+    first_axes: Sequence[Point], second: Sequence[Point],
+    second_edges: Sequence[tuple[Point, Point]], second_axes: Sequence[Point],
+) -> float:
+    for axis in (*first_axes, *second_axes):
+        first_projection = [point[0] * axis[0] + point[1] * axis[1] for point in first]
+        second_projection = [point[0] * axis[0] + point[1] * axis[1] for point in second]
+        if max(first_projection) < min(second_projection) or max(second_projection) < min(first_projection):
+            return min(
+                min(
+                    point_segment_distance(point, start, end)
+                    for point in first
+                    for start, end in second_edges
+                ),
+                min(
+                    point_segment_distance(point, start, end)
+                    for point in second
+                    for start, end in first_edges
+                ),
+            )
+    return 0.0
 
 
 def polygons_intersect(first: Sequence[Point], second: Sequence[Point]) -> bool:
@@ -329,51 +463,86 @@ def vehicle_step(state: VehicleState, command: ControlCommand, dt: float, geomet
 
 
 class GeometricPlanner:
-    PROFILE_FRACTION = {TrajectoryProfile.CONSERVATIVE: .5, TrajectoryProfile.NOMINAL: .72, TrajectoryProfile.TIGHT: 1.0}
-    PROFILE_LATERAL_FRACTION = {TrajectoryProfile.CONSERVATIVE: 1.0,
-                                TrajectoryProfile.NOMINAL: 1.0,
-                                TrajectoryProfile.TIGHT: 1.0}
-
     def __init__(self, geometry: VehicleGeometry | None = None, tuning: PlannerTuning | None = None) -> None:
         self.tuning = (tuning or PlannerTuning()).validate()
-        self.geometry = geometry or VehicleGeometry(fixed_speed_cm_s=self.tuning.fixed_speed_cm_s,
-            max_acceleration_cm_s2=self.tuning.max_acceleration_cm_s2,
-            max_deceleration_cm_s2=self.tuning.max_deceleration_cm_s2,
-            max_steering_rate_deg_s=self.tuning.max_steering_rate_deg_s)
+        self.geometry = geometry or VehicleGeometry()
+        self._cycle_stats = {
+            "simulation_calls": 0,
+            "segment_simulations": 0,
+            "clearance_evaluations": 0,
+        }
+
+    def _hard_clearance(self, axis: str) -> float:
+        if self.tuning.disable_hard_safety_margins:
+            return 0.0
+        return {
+            "front": FIXED_RULES.hard_front_clearance_cm,
+            "side": FIXED_RULES.hard_side_clearance_cm,
+            "rear": FIXED_RULES.hard_rear_clearance_cm,
+        }[axis]
 
     @property
-    def planning_horizon_s(self) -> float: return self.tuning.planning_horizon_s
+    def prediction_horizon_cm(self) -> float:
+        return min(self.tuning.planning_horizon_cm, FIXED_RULES.perception_range_cm)
+
     @property
-    def preview_horizon_s(self) -> float: return self.tuning.preview_horizon_s
+    def planning_horizon_s(self) -> float:
+        """Valor temporal histórico conservado para diagnósticos."""
+        return self.tuning.planning_horizon_s
+
+    @property
+    def preview_horizon_s(self) -> float:
+        """Valor temporal histórico conservado para visualización."""
+        return self.tuning.preview_horizon_s
+
+    @staticmethod
+    def _known_obstacles(data: PlannerInput) -> tuple[VisibleObstacle, ...]:
+        """Combina detecciones actuales y memoria sin duplicar objetos."""
+        known = {item.object_id: item for item in data.tracked_obstacles}
+        known.update({item.object_id: item for item in data.visible_obstacles})
+        return tuple(known.values())
 
     def _nearest(self, data: PlannerInput) -> VisibleObstacle | None:
+        """Devuelve el obstáculo visible más próximo que está por delante.
+
+        La capa de percepción ya entrega exclusivamente objetos dentro del
+        FOV. No se aplica un segundo umbral de distancia: desde la primera
+        detección el planner debe poder predecir cómo pasar el objeto, aunque
+        la acción inmediata siga siendo recta mientras la proyección frontal
+        esté libre.
+        """
         s = data.vehicle_state
-        tangent = self._track_tangent(data)
-        forward = (math.cos(tangent), math.sin(tangent))
-        trigger=(max(self.geometry.minimum_left_radius_cm,self.geometry.minimum_right_radius_cm)
-                 + self.geometry.length_cm/2 + self.tuning.safety_margins.hard_front_cm
-                 + self.geometry.fixed_speed_cm_s*self.tuning.replanning_period_s
-                 + min(self.geometry.minimum_left_radius_cm,
-                       self.geometry.minimum_right_radius_cm))
+        forward = (math.cos(s.heading_rad), math.sin(s.heading_rad))
+        known_obstacles = self._known_obstacles(data)
+        if data.active_target_id is not None:
+            active = next(
+                (
+                    obstacle for obstacle in known_obstacles
+                    if obstacle.object_id == data.active_target_id
+                    and not obstacle.already_passed
+                ),
+                None,
+            )
+            if active is not None:
+                return active
         ahead = []
-        for obstacle in data.visible_obstacles:
+        for obstacle in known_obstacles:
+            if obstacle.already_passed:
+                continue
             dx, dy = obstacle.x_cm - s.x_cm, obstacle.y_cm - s.y_cm
             longitudinal = dx * forward[0] + dy * forward[1]
-            if 0 < longitudinal <= trigger and math.hypot(dx, dy) <= trigger:
+            if longitudinal > 0.0:
                 ahead.append(obstacle)
         return min(ahead, key=lambda o: math.dist((s.x_cm,s.y_cm),(o.x_cm,o.y_cm)), default=None)
 
-    def _side(self, data: PlannerInput, target: VisibleObstacle | None) -> int:
-        if target and target.color.lower() == "green": return -1
-        if target and target.color.lower() == "red": return 1
-        if data.desired_heading_rad is not None:
-            heading_error=normalize_angle(data.desired_heading_rad-data.vehicle_state.heading_rad)
-            if abs(heading_error)>math.radians(FIXED_RULES.route_alignment_tolerance_deg):
-                return 1 if heading_error>0 else -1
-        return 1 if data.track_direction is TrackDirection.CLOCKWISE else -1
-
     def _track_tangent(self, data: PlannerInput) -> float:
-        """Dirección longitudinal local inferida de los límites conocidos."""
+        """Dirección longitudinal local de la ruta o, sin ella, de los muros."""
+        # El adaptador de percepción/ruta conoce la dirección de avance de la
+        # recta actual. Es más fiable que inferirla con un segmento de muro
+        # cuando el carro está en una esquina, donde hay muros verticales y
+        # horizontales visibles al mismo tiempo.
+        if data.desired_heading_rad is not None:
+            return data.desired_heading_rad
         headings: list[float] = []
         if data.drivable_boundary:
             headings.extend(
@@ -401,7 +570,19 @@ class GeometricPlanner:
         )
 
     def _target_tangent(self, data: PlannerInput, target: VisibleObstacle) -> float:
-        """Tangente de la recta actual o de la siguiente si está en esquina."""
+        """Tangente local de la recta a la que pertenece el obstáculo."""
+        if len(data.route_centerline) >= 2:
+            points = data.route_centerline
+            start, end = min(
+                zip(points, points[1:]),
+                key=lambda segment: point_segment_distance(
+                    (target.x_cm, target.y_cm), *segment,
+                ),
+            )
+            if start != end:
+                return math.atan2(end[1] - start[1], end[0] - start[0])
+
+        # Fallback para una integración que no tenga aún centro de ruta.
         tangent = self._track_tangent(data)
         right = (-math.sin(tangent), math.cos(tangent))
         lateral = ((target.x_cm - data.vehicle_state.x_cm) * right[0]
@@ -415,210 +596,528 @@ class GeometricPlanner:
         turn = math.pi / 2 if data.track_direction is TrackDirection.CLOCKWISE else -math.pi / 2
         return normalize_angle(tangent + turn)
 
-    def _straight(self) -> CandidateTrajectory:
-        hard = max(self.tuning.safety_margins.hard_front_cm,
-                   self.tuning.safety_margins.hard_side_cm,
-                   self.tuning.safety_margins.hard_rear_cm)
-        maneuver_distance = (max(self.geometry.minimum_left_radius_cm,
-                                 self.geometry.minimum_right_radius_cm)
-                             + self.geometry.length_cm / 2 + hard)
-        distance = max(FIXED_RULES.forward_projection_cm,
-                       self.geometry.fixed_speed_cm_s*self.tuning.planning_horizon_s,
-                       maneuver_distance + self.geometry.fixed_speed_cm_s*self.tuning.replanning_period_s + 1.0)
-        return CandidateTrajectory("STRAIGHT", None, (MotionPrimitive(PrimitiveType.STRAIGHT, distance, 0, self.geometry.fixed_speed_cm_s),))
-
-    def _corner_candidates(
-        self,
-        data: PlannerInput,
-        target: VisibleObstacle,
-        next_tangent: float,
-        overshoot_deg: float = 20.0,
-    ) -> list[CandidateTrajectory]:
-        """Arcos para entrar en la siguiente de las cuatro rectas."""
-        clockwise = data.track_direction is TrackDirection.CLOCKWISE
-        turn_sign = 1 if clockwise else -1
-        kind = PrimitiveType.ARC_RIGHT if clockwise else PrimitiveType.ARC_LEFT
-        # Un pequeño sobrepaso deja espacio para el footprint en la salida y
-        # se corrige en los replannings siguientes.
-        exit_heading = normalize_angle(
-            next_tangent + turn_sign * math.radians(overshoot_deg)
-        )
-        arc_angle = clamp(
-            abs(normalize_angle(exit_heading - data.vehicle_state.heading_rad)),
-            math.radians(10.0),
-            math.radians(110.0),
-        )
-        hold = self.geometry.length_cm + target.length_cm + 2 * self.tuning.safety_margins.hard_side_cm
-        candidates: list[CandidateTrajectory] = []
-        for profile, fraction in reversed(list(self.PROFILE_FRACTION.items())):
-            steering = turn_sign * self.geometry.steering_limit_deg(clockwise) * fraction
-            radius = abs(self.geometry.turning_radius_cm(steering) or math.inf)
-            candidates.append(CandidateTrajectory(
-                f"CORNER:{profile.value}:{'RIGHT' if clockwise else 'LEFT'}",
-                profile,
-                (
-                    MotionPrimitive(kind, radius * arc_angle, steering,
-                                    self.geometry.fixed_speed_cm_s),
-                    MotionPrimitive(PrimitiveType.STRAIGHT, hold, 0.0,
-                                    self.geometry.fixed_speed_cm_s),
-                ),
-            ))
-        return candidates
-
-    def _pass_then_route_candidates(
-        self,
-        data: PlannerInput,
-        target: VisibleObstacle,
-    ) -> list[CandidateTrajectory]:
-        """Mantiene el lado correcto y corrige la ruta después del paso."""
+    def _pass_target(
+        self, data: PlannerInput, target: VisibleObstacle
+    ) -> PassTarget | None:
+        """Construye el objetivo lateral de paso para un obstáculo coloreado."""
+        color = target.color.lower()
+        if color not in {"red", "green"}:
+            return None
         tangent = self._target_tangent(data, target)
         forward = (math.cos(tangent), math.sin(tangent))
-        target_forward = ((target.x_cm - data.vehicle_state.x_cm) * forward[0]
-                          + (target.y_cm - data.vehicle_state.y_cm) * forward[1])
-        approach = max(
-            1.0,
-            target_forward
-            - self.geometry.length_cm / 2
-            - target.length_cm / 2
-            - self.tuning.safety_margins.hard_rear_cm,
+        side = LocalSide.RIGHT if color == "red" else LocalSide.LEFT
+        clearance = (
+            target.width_cm / 2
+            + self.geometry.width_cm / 2
+            + self._hard_clearance("side")
+            + NUMERICAL_CLEARANCE_TOLERANCE_CM
         )
-        desired = data.desired_heading_rad or tangent
-        heading_error = normalize_angle(desired - data.vehicle_state.heading_rad)
-        turn_sign = 1 if heading_error > 0 else -1
-        kind = PrimitiveType.ARC_RIGHT if turn_sign > 0 else PrimitiveType.ARC_LEFT
-        candidates: list[CandidateTrajectory] = []
-        for profile, fraction in self.PROFILE_FRACTION.items():
-            steering = turn_sign * self.geometry.steering_limit_deg(turn_sign > 0) * fraction
-            radius = abs(self.geometry.turning_radius_cm(steering) or math.inf)
-            candidates.append(CandidateTrajectory(
-                f"PASS_THEN_ROUTE:{profile.value}:{'RIGHT' if turn_sign > 0 else 'LEFT'}",
-                profile,
-                (
-                    MotionPrimitive(PrimitiveType.STRAIGHT, approach, 0.0,
-                                    self.geometry.fixed_speed_cm_s),
-                    MotionPrimitive(kind, radius * abs(heading_error), steering,
-                                    self.geometry.fixed_speed_cm_s),
-                    MotionPrimitive(PrimitiveType.STRAIGHT, 20.0, 0.0,
-                                    self.geometry.fixed_speed_cm_s),
-                ),
-            ))
-        return candidates
+        return PassTarget(
+            obstacle_id=target.object_id,
+            side=side,
+            tangent_rad=tangent,
+            forward_vector=forward,
+            right_vector=right_vector(forward),
+            target_lateral_offset_cm=clearance if side is LocalSide.RIGHT else -clearance,
+        )
 
-    def _local_candidates(
+    @staticmethod
+    def _lateral_offset(point: Point, reference: Point, pass_target: PassTarget) -> float:
+        dx, dy = point[0] - reference[0], point[1] - reference[1]
+        return dx * pass_target.right_vector[0] + dy * pass_target.right_vector[1]
+
+    @staticmethod
+    def _pass_boundary_error(
+        current_lateral: float, pass_target: PassTarget
+    ) -> float:
+        """Devuelve solo el error que aún falta para cruzar la frontera.
+
+        ``target_lateral_offset_cm`` es el límite mínimo de separación, no un
+        punto que el vehículo deba alcanzar exactamente. Por eso cualquier
+        posición más allá de la frontera ya tiene error cero.
+        """
+        boundary = pass_target.target_lateral_offset_cm
+        if pass_target.side is LocalSide.LEFT:
+            return min(0.0, boundary - current_lateral)
+        return max(0.0, boundary - current_lateral)
+
+    def _steering_towards_pass_target(
+        self, data: PlannerInput, target: VisibleObstacle, pass_target: PassTarget
+    ) -> int:
+        """Convierte el error lateral de la recta a LEFT/RIGHT del vehículo."""
+        state = data.vehicle_state
+        current = self._lateral_offset(
+            (state.x_cm, state.y_cm), (target.x_cm, target.y_cm), pass_target,
+        )
+        error = self._pass_boundary_error(current, pass_target)
+        if abs(error) <= NUMERICAL_CLEARANCE_TOLERANCE_CM:
+            return 0
+        desired_track_direction = 1.0 if error > 0.0 else -1.0
+        vehicle_right = (-math.sin(state.heading_rad), math.cos(state.heading_rad))
+        projected = (
+            desired_track_direction * pass_target.right_vector[0] * vehicle_right[0]
+            + desired_track_direction * pass_target.right_vector[1] * vehicle_right[1]
+        )
+        return 1 if projected >= 0.0 else -1
+
+    def _planning_distance(
+        self, data: PlannerInput, target: VisibleObstacle | None,
+        distance_override_cm: float | None = None,
+    ) -> float:
+        """Distancia común de predicción limitada por el alcance de visión.
+
+        El beam normalmente cubre 50 cm. Si una configuración solicita más,
+        nunca se proyecta fuera del alcance de percepción disponible.
+        """
+        requested = (
+            distance_override_cm
+            if distance_override_cm is not None
+            else self.tuning.planning_horizon_cm
+        )
+        speed = max(
+            abs(data.vehicle_state.speed_cm_s),
+            self.geometry.fixed_speed_cm_s,
+        )
+        temporal_plan_cm = speed * self.tuning.planning_horizon_s
+        temporal_preview_cm = speed * self.tuning.preview_horizon_s
+        return min(
+            max(requested, temporal_plan_cm),
+            temporal_preview_cm,
+            FIXED_RULES.perception_range_cm,
+        )
+
+    def _straight(self, distance_cm: float) -> CandidateTrajectory:
+        return CandidateTrajectory(
+            "STRAIGHT", None,
+            (MotionPrimitive(
+                PrimitiveType.STRAIGHT, distance_cm, 0.0,
+                self.geometry.fixed_speed_cm_s,
+            ),),
+        )
+
+    def _beam_actions(
+        self, level: int = 0, legacy_angles: bool = False,
+    ) -> tuple[tuple[str, PrimitiveType, float, TrajectoryProfile | None], ...]:
+        """Acciones discretas Ackermann usadas por cada nivel del beam."""
+        actions = [("STRAIGHT", PrimitiveType.STRAIGHT, 0.0, None)]
+        if legacy_angles:
+            configured_angles = (
+                self.tuning.turn_angles_deg
+                if level == 0 else self.tuning.counter_steer_angles_deg
+            )
+            for side, kind in (
+                ("LEFT", PrimitiveType.ARC_LEFT),
+                ("RIGHT", PrimitiveType.ARC_RIGHT),
+            ):
+                positive_angles = tuple(angle for angle in configured_angles if angle > 0.0)
+                for angle in configured_angles:
+                    if angle <= 0.0:
+                        continue
+                    profile = (
+                        TrajectoryProfile.CONSERVATIVE
+                        if angle == min(positive_angles)
+                        else TrajectoryProfile.TIGHT
+                        if angle == max(positive_angles)
+                        else TrajectoryProfile.NOMINAL
+                    )
+                    actions.append((
+                        f"{side}_{angle:g}DEG", kind, angle, profile,
+                    ))
+            return tuple(actions)
+
+        fractions = self.tuning.steering_fractions
+        for side, kind in (
+            ("LEFT", PrimitiveType.ARC_LEFT),
+            ("RIGHT", PrimitiveType.ARC_RIGHT),
+        ):
+            limit = self.geometry.steering_limit_deg(kind is PrimitiveType.ARC_RIGHT)
+            for index, fraction in enumerate(fractions):
+                label = "SOFT" if index == 0 else "STRONG" if index == len(fractions) - 1 else str(index + 1)
+                actions.append((
+                    f"{side}_{label}", kind, fraction * limit,
+                    TrajectoryProfile.CONSERVATIVE if index == 0 else TrajectoryProfile.TIGHT,
+                ))
+        return tuple(actions)
+
+    def _beam_primitive(
         self,
-        data: PlannerInput,
-        target: VisibleObstacle | None,
-        route_priority: bool,
-    ) -> list[CandidateTrajectory]:
-        """Tres acciones locales baratas para garantizar replanning continuo."""
-        side = self._side(data, None if route_priority else target)
-        kind = PrimitiveType.ARC_RIGHT if side > 0 else PrimitiveType.ARC_LEFT
-        distance = max(
-            10.0,
-            self.geometry.fixed_speed_cm_s * self.tuning.replanning_period_s * 2.0,
+        kind: PrimitiveType,
+        steering_deg: float,
+        distance_cm: float,
+    ) -> MotionPrimitive:
+        if kind is PrimitiveType.STRAIGHT:
+            steering = 0.0
+        else:
+            steering = steering_deg if kind is PrimitiveType.ARC_RIGHT else -steering_deg
+        return MotionPrimitive(
+            kind, distance_cm, steering, self.geometry.fixed_speed_cm_s,
         )
-        result: list[CandidateTrajectory] = []
-        for profile, fraction in reversed(list(self.PROFILE_FRACTION.items())):
-            steering = side * self.geometry.steering_limit_deg(side > 0) * fraction
-            result.append(CandidateTrajectory(
-                f"LOCAL:{profile.value}:{'RIGHT' if side > 0 else 'LEFT'}",
-                profile,
-                (MotionPrimitive(kind, distance, steering,
-                                 self.geometry.fixed_speed_cm_s),),
-            ))
-        return result
 
-    def _avoidance(self, data: PlannerInput) -> list[CandidateTrajectory]:
+    def _beam_partial_valid(self, candidate: CandidateTrajectory) -> bool:
+        """Valida fallos duros ya calculados durante la expansión."""
+        return not candidate.hard_failure and candidate.rejection_reason is None
+
+    def _beam_rank(self, candidate: CandidateTrajectory, data: PlannerInput) -> float:
+        """Heurística de poda; el score oficial se calcula al final."""
+        if candidate.final_state is None:
+            return -math.inf
+        final = candidate.final_state
+        desired = data.desired_heading_rad
+        heading_error = 0.0 if desired is None else abs(math.degrees(
+            normalize_angle(final.heading_rad - desired),
+        ))
+        candidate.progress_cm = math.dist(
+            (data.vehicle_state.x_cm, data.vehicle_state.y_cm),
+            (final.x_cm, final.y_cm),
+        )
+        candidate.final_heading_error_deg = heading_error
+        return (
+            (candidate.minimum_clearance_cm if math.isfinite(candidate.minimum_clearance_cm) else -1000.0) * 3.0
+            + candidate.progress_cm
+            - heading_error * 0.2
+            - candidate.steering_changes * 0.05
+        )
+
+    def _geometry_cache(self, data: PlannerInput) -> GeometryCache:
+        """Precalcula las geometrías estáticas de un ciclo de planificación."""
+        target_polygon = None
+        known_obstacles = self._known_obstacles(data)
+        if data.active_target_id is not None:
+            target = next(
+                (item for item in known_obstacles
+                 if item.object_id == data.active_target_id),
+                None,
+            )
+            target_polygon = target.polygon() if target is not None else None
+        obstacle_geometry_list = []
+        for item in known_obstacles:
+            polygon = item.polygon()
+            obstacle_geometry_list.append((
+                item.object_id,
+                polygon,
+                _polygon_edges(polygon),
+                tuple(_axes(polygon)),
+            ))
+        obstacle_geometry = tuple(obstacle_geometry_list)
+        return GeometryCache(
+            obstacle_polygons=tuple(
+                (object_id, polygon)
+                for object_id, polygon, _, _ in obstacle_geometry
+            ),
+            obstacle_geometry=obstacle_geometry,
+            wall_segments=tuple(
+                (item.wall_id, item.start, item.end, item.thickness_cm)
+                for item in data.visible_walls
+            ),
+            boundary_edges=tuple(
+                zip(data.drivable_boundary,
+                    data.drivable_boundary[1:] + data.drivable_boundary[:1])
+            ) if data.drivable_boundary else (),
+            boundary_polygon=data.drivable_boundary,
+            active_target_polygon=target_polygon,
+        )
+
+    def _initialize_candidate(
+        self, initial: VehicleState, candidate: CandidateTrajectory,
+        cache: GeometryCache,
+    ) -> None:
+        candidate.geometry_cache = cache
+        footprint = self.geometry.footprint(initial)
+        candidate.final_state = initial
+        candidate.final_footprint = footprint
+        candidate.closest_target_footprint = footprint
+        candidate.closest_target_distance_cm = math.inf
+        clearance = self._evaluate_footprint(footprint, cache)
+        candidate.points = []
+        candidate.trajectory_points = []
+        if self.tuning.diagnostic_level == "full":
+            candidate.points.append((initial.x_cm, initial.y_cm))
+            candidate.trajectory_points.append(TrajectoryPoint(
+                initial, 0, 0.0, footprint, clearance,
+            ))
+        self._accumulate_clearance(candidate, clearance)
+
+    @staticmethod
+    def _copy_candidate(parent: CandidateTrajectory, candidate_id: str,
+                        profile: TrajectoryProfile, primitives: tuple[MotionPrimitive, ...],
+                        target_obstacle_id: str | None,
+                        desired_pass_side: LocalSide | None) -> CandidateTrajectory:
+        return replace(
+            parent,
+            candidate_id=candidate_id,
+            profile=profile,
+            primitives=primitives,
+            points=list(parent.points),
+            trajectory_points=list(parent.trajectory_points),
+            target_obstacle_id=target_obstacle_id,
+            desired_pass_side=desired_pass_side,
+            safe=False,
+            rejection_reason=None,
+            diagnostic_rejection_reason=None,
+            collision_type=None,
+            collision_object_id=None,
+            hard_failure=False,
+            score=-math.inf,
+        )
+
+    @staticmethod
+    def _accumulate_clearance(
+        candidate: CandidateTrajectory, clearance: ClearanceResult,
+    ) -> None:
+        candidate.minimum_clearance_cm = min(
+            candidate.minimum_clearance_cm, clearance.min_clearance_cm,
+        )
+        candidate.minimum_obstacle_clearance_cm = min(
+            candidate.minimum_obstacle_clearance_cm,
+            clearance.obstacle_clearance_cm,
+        )
+        candidate.minimum_wall_clearance_cm = min(
+            candidate.minimum_wall_clearance_cm,
+            clearance.wall_clearance_cm,
+        )
+        if clearance.collision:
+            candidate.physical_collision = True
+            candidate.hard_failure = True
+            if candidate.collision_type is None:
+                candidate.collision_type = clearance.collision_type
+                candidate.collision_object_id = clearance.object_id
+
+    def _simulate_segment(
+        self, initial: VehicleState, primitive: MotionPrimitive,
+        candidate: CandidateTrajectory, primitive_index: int,
+        cache: GeometryCache, *, stop_on_collision: bool = True,
+    ) -> VehicleState:
+        """Simula únicamente un nuevo segmento y acumula sus métricas."""
+        self._cycle_stats["segment_simulations"] += 1
+        if not self._primitive_valid(primitive):
+            candidate.rejection_reason = "kinematics"
+            candidate.diagnostic_rejection_reason = "KINEMATIC_LIMIT"
+            candidate.hard_failure = True
+            return initial
+        state = initial
+        traveled = 0.0
+        for _ in range(2000):
+            if traveled >= primitive.distance_cm:
+                break
+            old = state
+            state = vehicle_step(
+                state,
+                ControlCommand(primitive.target_speed_cm_s, primitive.steering_angle_deg),
+                FIXED_RULES.simulation_dt_s,
+                self.geometry,
+            )
+            increment = math.dist(
+                (old.x_cm, old.y_cm), (state.x_cm, state.y_cm),
+            )
+            traveled += increment
+            total = candidate.length_cm + increment
+            footprint = self.geometry.footprint(state)
+            clearance = self._evaluate_footprint(footprint, cache)
+            if self.tuning.diagnostic_level == "full":
+                candidate.points.append((state.x_cm, state.y_cm))
+                candidate.trajectory_points.append(TrajectoryPoint(
+                    state, primitive_index, total, footprint, clearance,
+                ))
+            candidate.final_state = state
+            candidate.final_footprint = footprint
+            if candidate.target_obstacle_id is not None:
+                target_polygon = next(
+                    (
+                        polygon for object_id, polygon in cache.obstacle_polygons
+                        if object_id == candidate.target_obstacle_id
+                    ),
+                    None,
+                )
+                if target_polygon is not None:
+                    target_center = (
+                        sum(point[0] for point in target_polygon) / len(target_polygon),
+                        sum(point[1] for point in target_polygon) / len(target_polygon),
+                    )
+                    target_distance = math.dist(
+                        (state.x_cm, state.y_cm), target_center,
+                    )
+                    if target_distance < candidate.closest_target_distance_cm:
+                        candidate.closest_target_distance_cm = target_distance
+                        candidate.closest_target_footprint = footprint
+            candidate.length_cm = total
+            self._accumulate_clearance(candidate, clearance)
+            if clearance.collision and stop_on_collision:
+                return state
+        else:
+            candidate.rejection_reason = "simulation_limit"
+            candidate.diagnostic_rejection_reason = "SIMULATION_LIMIT"
+        candidate.steering_effort += abs(primitive.steering_angle_deg) * primitive.distance_cm
+        if len(candidate.primitives) > 1:
+            previous = candidate.primitives[-2]
+            candidate.steering_changes += abs(
+                primitive.steering_angle_deg - previous.steering_angle_deg,
+            )
+        return state
+
+    def _straight_beam_candidate(
+        self, data: PlannerInput, cache: GeometryCache,
+    ) -> CandidateTrajectory:
+        """Fast path equivalente al beam recto completo."""
+        horizon = self._planning_distance(data, None)
+        segment = horizon / self.tuning.prediction_segments
+        candidate = CandidateTrajectory(
+            "BEAM:" + ">".join(["STRAIGHT"] * self.tuning.prediction_segments),
+            TrajectoryProfile.NOMINAL,
+            (),
+        )
+        self._initialize_candidate(data.vehicle_state, candidate, cache)
+        state = data.vehicle_state
+        for index in range(self.tuning.prediction_segments):
+            primitive = MotionPrimitive(
+                PrimitiveType.STRAIGHT, segment, 0.0,
+                self.geometry.fixed_speed_cm_s,
+            )
+            candidate.primitives += (primitive,)
+            state = self._simulate_segment(
+                state, primitive, candidate, index, cache,
+            )
+        return candidate
+
+    def _combine_recovery_candidate(
+        self, probe: CandidateTrajectory, forward: CandidateTrajectory,
+    ) -> CandidateTrajectory:
+        """Une un reverse ya simulado con un forward ya simulado."""
+        reverse_distance = self._reverse_distance(probe)
+        points = list(probe.points) + list(forward.points[1:])
+        trajectory_points = list(probe.trajectory_points)
+        trajectory_points.extend(
+            replace(
+                point,
+                traveled_cm=point.traveled_cm + reverse_distance,
+            )
+            for point in forward.trajectory_points[1:]
+        )
+        return replace(
+            forward,
+            candidate_id=f"RECOVERY_{reverse_distance:g}CM:{forward.candidate_id}",
+            primitives=probe.primitives + forward.primitives,
+            points=points,
+            trajectory_points=trajectory_points,
+            length_cm=probe.length_cm + forward.length_cm,
+            minimum_clearance_cm=min(
+                probe.minimum_clearance_cm, forward.minimum_clearance_cm,
+            ),
+            minimum_obstacle_clearance_cm=min(
+                probe.minimum_obstacle_clearance_cm,
+                forward.minimum_obstacle_clearance_cm,
+            ),
+            minimum_wall_clearance_cm=min(
+                probe.minimum_wall_clearance_cm,
+                forward.minimum_wall_clearance_cm,
+            ),
+            physical_collision=probe.physical_collision or forward.physical_collision,
+            hard_failure=probe.hard_failure or forward.hard_failure,
+            collision_type=probe.collision_type or forward.collision_type,
+            collision_object_id=probe.collision_object_id or forward.collision_object_id,
+            geometry_cache=probe.geometry_cache,
+            steering_effort=probe.steering_effort + forward.steering_effort,
+            steering_changes=(
+                probe.steering_changes + forward.steering_changes
+                + abs(
+                    forward.primitives[0].steering_angle_deg
+                    - probe.primitives[-1].steering_angle_deg
+                )
+                if probe.primitives and forward.primitives
+                else probe.steering_changes + forward.steering_changes
+            ),
+            safe=False,
+            rejection_reason=None,
+            diagnostic_rejection_reason=None,
+            score=-math.inf,
+        )
+
+    def _forward_candidates(
+        self, data: PlannerInput, distance_override_cm: float | None = None,
+        cache: GeometryCache | None = None, legacy_angles: bool = False,
+    ) -> list[CandidateTrajectory]:
+        """Genera trayectorias completas con expansión incremental del beam."""
+        cache = cache or self._geometry_cache(data)
         target = self._nearest(data)
-        hard = self.tuning.safety_margins.hard_side_cm
-        side = self._side(data, target)
-        if target is not None:
-            track_tangent = self._track_tangent(data)
-            target_tangent = self._target_tangent(data, target)
-            if abs(normalize_angle(target_tangent - track_tangent)) > math.radians(45.0):
-                return self._corner_candidates(data, target, target_tangent)
-        clearance_shift = (self.geometry.width_cm/2
-                           + self.tuning.safety_margins.preferred_side_cm
-                           + (target.width_cm/2 if target else 0)
-                           + NUMERICAL_CLEARANCE_TOLERANCE_CM)
-        shift = clearance_shift
-        hold = self.geometry.length_cm + 2*hard + (target.length_cm if target else 0)
-        target_forward = 0.0
-        if target:
-            s = data.vehicle_state
-            target_tangent = self._target_tangent(data, target)
-            track_tangent = self._track_tangent(data)
-            projection_heading = (
-                s.heading_rad
-                if abs(normalize_angle(target_tangent - track_tangent))
-                    <= math.radians(45.0)
-                else target_tangent
+        pass_target = self._pass_target(data, target) if target else None
+        horizon_cm = self._planning_distance(data, target, distance_override_cm)
+        segment_cm = horizon_cm / self.tuning.prediction_segments
+        beam: list[CandidateTrajectory] = [CandidateTrajectory(
+            "BEAM_ROOT", TrajectoryProfile.NOMINAL, (),
+            target_obstacle_id=target.object_id if target else None,
+            desired_pass_side=pass_target.side if pass_target else None,
+        )]
+        self._initialize_candidate(data.vehicle_state, beam[0], cache)
+
+        for level in range(self.tuning.prediction_segments):
+            expanded: list[CandidateTrajectory] = []
+            for parent in beam:
+                for label, kind, fraction, profile in self._beam_actions(
+                    level, legacy_angles,
+                ):
+                    primitive = self._beam_primitive(kind, fraction, segment_cm)
+                    candidate = self._copy_candidate(
+                        parent,
+                        f"BEAM:{label}" if parent.candidate_id == "BEAM_ROOT"
+                        else f"{parent.candidate_id}>{label}",
+                        profile or parent.profile or TrajectoryProfile.NOMINAL,
+                        parent.primitives + (primitive,),
+                        target.object_id if target else None,
+                        pass_target.side if pass_target else None,
+                    )
+                    self._simulate_segment(
+                        parent.final_state or data.vehicle_state,
+                        primitive,
+                        candidate,
+                        level,
+                        cache,
+                    )
+                    if self._beam_partial_valid(candidate):
+                        expanded.append(candidate)
+            expanded.sort(key=lambda item: self._beam_rank(item, data), reverse=True)
+            beam = expanded[:self.tuning.beam_width]
+            if not beam:
+                break
+
+        complete = [candidate for candidate in beam if len(candidate.primitives) == 3]
+        for candidate in complete:
+            maximum = max(
+                (abs(primitive.steering_angle_deg) for primitive in candidate.primitives),
+                default=0.0,
             )
-            forward = (math.cos(projection_heading), math.sin(projection_heading))
-            right=(-forward[1],forward[0])
-            target_forward = (target.x_cm-s.x_cm)*forward[0] + (target.y_cm-s.y_cm)*forward[1]
-            target_lateral = (target.x_cm-s.x_cm)*right[0] + (target.y_cm-s.y_cm)*right[1]
-            shift = max(0.0, clearance_shift + side * target_lateral)
-            if (shift <= 1.0
-                    and abs(normalize_angle(target_tangent - s.heading_rad))
-                    > math.radians(FIXED_RULES.route_alignment_tolerance_deg)):
-                return self._corner_candidates(data, target, target_tangent, overshoot_deg=0.0)
-        candidates = []
-        profiles = list(self.PROFILE_FRACTION.items())
-        if target is not None:
-            # Cerca de un obstáculo se evalúa primero la maniobra que necesita
-            # menos longitud longitudinal. Así el presupuesto siempre cubre al
-            # menos el perfil físicamente más apto para un espacio reducido.
-            profiles.reverse()
-        for profile, fraction in profiles:
-            steering = side*self.geometry.steering_limit_deg(side>0)*fraction
-            radius = abs(self.geometry.turning_radius_cm(steering) or math.inf)
-            out = PrimitiveType.ARC_RIGHT if side>0 else PrimitiveType.ARC_LEFT
-            if target is None:
-                heading_error=(normalize_angle(data.desired_heading_rad-data.vehicle_state.heading_rad)
-                               if data.desired_heading_rad is not None else side*math.pi/2)
-                arc_angle=clamp(abs(heading_error),math.radians(10),math.radians(90))
-                arc_distance = radius * arc_angle
-                candidates.append(CandidateTrajectory(
-                    f"{profile.value}:{'RIGHT' if side>0 else 'LEFT'}", profile,
-                    (MotionPrimitive(out, arc_distance, steering, self.geometry.fixed_speed_cm_s),
-                     MotionPrimitive(PrimitiveType.STRAIGHT, 20.0, 0, self.geometry.fixed_speed_cm_s))))
-                continue
-            back = PrimitiveType.ARC_LEFT if side>0 else PrimitiveType.ARC_RIGHT
-            back_steering = -side*self.geometry.steering_limit_deg(side<0)*fraction
-            back_radius = abs(self.geometry.turning_radius_cm(back_steering) or math.inf)
-            # ``shift`` ya representa cuánto falta para colocar el footprint
-            # al lado exigido. En replanning no se debe repetir el
-            # desplazamiento completo desde cero.
-            profile_shift=max(0.5,shift*self.PROFILE_LATERAL_FRACTION[profile])
-            arc_angle=min(math.acos(clamp(1-profile_shift/(radius+back_radius),-1,1)), math.radians(90))
-            arc = max(4, radius*arc_angle)
-            back_arc = max(4,back_radius*arc_angle)
-            steering_transition_cm = (
-                self.geometry.fixed_speed_cm_s
-                * abs(back_steering - steering)
-                / self.geometry.max_steering_rate_deg_s
+            if maximum >= self.geometry.max_steering_deg * 0.95:
+                candidate.profile = TrajectoryProfile.TIGHT
+            elif maximum > 0.0:
+                candidate.profile = TrajectoryProfile.CONSERVATIVE
+            else:
+                candidate.profile = TrajectoryProfile.NOMINAL
+        return complete
+
+    def _reverse_probes(self, data: PlannerInput) -> list[CandidateTrajectory]:
+        """Retrocesos mínimos que se prueban solo después de fallar forward."""
+        target = self._nearest(data)
+        pass_target = self._pass_target(data, target) if target else None
+        return [
+            CandidateTrajectory(
+                f"REVERSE_{distance:g}CM",
+                TrajectoryProfile.TIGHT,
+                (MotionPrimitive(
+                    PrimitiveType.REVERSE,
+                    distance,
+                    0.0,
+                    -self.geometry.fixed_speed_cm_s / 2,
+                ),),
+                target_obstacle_id=target.object_id if target else None,
+                desired_pass_side=pass_target.side if pass_target else None,
             )
-            approach=max(0,target_forward-self.geometry.length_cm/2
-                         -(target.length_cm/2 if target else 0)-hard
-                         -(radius+back_radius)*math.sin(arc_angle))
-            parts = []
-            if approach > 1: parts.append(MotionPrimitive(PrimitiveType.STRAIGHT, approach, 0, self.geometry.fixed_speed_cm_s))
-            parts += [MotionPrimitive(out, arc, steering, self.geometry.fixed_speed_cm_s),
-                      MotionPrimitive(back, back_arc + steering_transition_cm,
-                                      back_steering, self.geometry.fixed_speed_cm_s),
-                      MotionPrimitive(PrimitiveType.STRAIGHT, hold, 0, self.geometry.fixed_speed_cm_s),
-                      MotionPrimitive(back, back_arc, back_steering, self.geometry.fixed_speed_cm_s),
-                      MotionPrimitive(out, arc + steering_transition_cm,
-                                      steering, self.geometry.fixed_speed_cm_s)]
-            candidates.append(CandidateTrajectory(f"{profile.value}:{'RIGHT' if side>0 else 'LEFT'}", profile, tuple(parts)))
-        steering = side*self.geometry.steering_limit_deg(side>0)
-        arc_kind = PrimitiveType.ARC_RIGHT if side>0 else PrimitiveType.ARC_LEFT
-        candidates.append(CandidateTrajectory(f"REVERSE_TIGHT:{'RIGHT' if side>0 else 'LEFT'}", TrajectoryProfile.TIGHT,
-            (MotionPrimitive(PrimitiveType.REVERSE, 10, 0, -self.geometry.fixed_speed_cm_s/2),
-             MotionPrimitive(arc_kind, 18, steering, self.geometry.fixed_speed_cm_s),
-             MotionPrimitive(PrimitiveType.STRAIGHT, hold, 0, self.geometry.fixed_speed_cm_s))))
-        return candidates
+            for distance in self.tuning.reverse_probe_distances_cm
+        ]
+
+    @staticmethod
+    def _reverse_distance(candidate: CandidateTrajectory) -> float:
+        return sum(
+            primitive.distance_cm for primitive in candidate.primitives
+            if primitive.kind is PrimitiveType.REVERSE
+        )
 
     def _primitive_valid(self, p: MotionPrimitive) -> bool:
         if abs(p.steering_angle_deg-self.geometry.clamp_steering(p.steering_angle_deg)) > 1e-9: return False
@@ -627,148 +1126,693 @@ class GeometricPlanner:
         if p.kind is PrimitiveType.ARC_LEFT: return radius is not None and abs(radius) >= self.geometry.minimum_left_radius_cm-1e-6
         return radius is None
 
-    def simulate(self, initial: VehicleState, candidate: CandidateTrajectory) -> None:
-        state, total = initial, 0.0
-        candidate.points = [(state.x_cm,state.y_cm)]
-        candidate.trajectory_points = [TrajectoryPoint(state,0,0,self.geometry.footprint(state))]
+    def simulate(
+        self, initial: VehicleState, candidate: CandidateTrajectory,
+        cache: GeometryCache | None = None,
+    ) -> None:
+        # Una trayectoria comprometida se vuelve a evaluar en cada ciclo. No
+        # conservar el resultado anterior evita que un choque nuevo herede
+        # ``safe=True`` o un score viejo.
+        candidate.points = []
+        candidate.trajectory_points = []
+        candidate.safe = False
+        candidate.physical_collision = False
+        candidate.minimum_clearance_cm = math.inf
+        candidate.minimum_obstacle_clearance_cm = math.inf
+        candidate.minimum_wall_clearance_cm = math.inf
+        candidate.progress_cm = 0.0
+        candidate.final_heading_error_deg = 0.0
+        candidate.steering_effort = 0.0
+        candidate.steering_changes = 0.0
+        candidate.length_cm = 0.0
+        candidate.correct_pass_side = True
+        candidate.rejection_reason = None
+        candidate.diagnostic_rejection_reason = None
+        candidate.collision_type = None
+        candidate.collision_object_id = None
+        candidate.pass_side_feasible = None
+        candidate.recovery_probe_valid = False
+        candidate.score = -math.inf
+        self._cycle_stats["simulation_calls"] += 1
+        if cache is None:
+            cache = self._geometry_cache(PlannerInput(initial))
+        self._initialize_candidate(initial, candidate, cache)
+        state = initial
         for index, primitive in enumerate(candidate.primitives):
-            if not self._primitive_valid(primitive): candidate.rejection_reason="kinematics"; return
-            traveled=0.0
-            for _ in range(2000):
-                if traveled >= primitive.distance_cm: break
-                old=state
-                state=vehicle_step(state,ControlCommand(primitive.target_speed_cm_s,primitive.steering_angle_deg),self.tuning.simulation_dt_s,self.geometry)
-                increment=math.dist((old.x_cm,old.y_cm),(state.x_cm,state.y_cm)); traveled+=increment; total+=increment
-                candidate.points.append((state.x_cm,state.y_cm)); candidate.trajectory_points.append(TrajectoryPoint(state,index,total,self.geometry.footprint(state)))
-            else: candidate.rejection_reason="simulation_limit"; return
-        candidate.length_cm=total
+            if not self._primitive_valid(primitive):
+                candidate.rejection_reason="kinematics"
+                candidate.diagnostic_rejection_reason="KINEMATIC_LIMIT"
+                return
+            state = self._simulate_segment(
+                state, primitive, candidate, index, cache,
+                stop_on_collision=False,
+            )
+
+    def _evaluate_footprint(
+        self, footprint: Polygon, cache: GeometryCache,
+    ) -> ClearanceResult:
+        """Calcula una vez todas las distancias y el diagnóstico de colisión."""
+        self._cycle_stats["clearance_evaluations"] += 1
+        obstacle_clearance = math.inf
+        obstacle_hits: list[str] = []
+        footprint_edges = _polygon_edges(footprint)
+        footprint_axes = tuple(_axes(footprint))
+        for object_id, polygon, edges, axes in cache.obstacle_geometry:
+            distance = _polygon_distance_prepared(
+                footprint, footprint_edges, footprint_axes,
+                polygon, edges, axes,
+            )
+            obstacle_clearance = min(obstacle_clearance, distance)
+            if distance <= 1e-9:
+                obstacle_hits.append(object_id)
+
+        wall_clearance = math.inf
+        wall_hit = False
+        for _, start, end, thickness in cache.wall_segments:
+            if any(_segments_intersect(start, end, a, b) for a, b in footprint_edges):
+                distance = -thickness / 2
+            else:
+                distance = min(
+                    min(point_segment_distance(point, start, end) for point in footprint),
+                    min(
+                        point_segment_distance(point, a, b)
+                        for point in (start, end)
+                        for a, b in footprint_edges
+                    ),
+                ) - thickness / 2
+            wall_clearance = min(wall_clearance, distance)
+            wall_hit |= distance <= 1e-9
+
+        out_of_track = bool(cache.boundary_polygon) and not all(
+            point_in_polygon(point, cache.boundary_polygon)
+            for point in footprint
+        )
+        if cache.boundary_edges:
+            wall_clearance = min(
+                wall_clearance,
+                min(
+                    point_segment_distance(point, start, end)
+                    for point in footprint
+                    for start, end in cache.boundary_edges
+                ),
+            )
+
+        collision = out_of_track or bool(obstacle_hits) or wall_hit
+        if out_of_track:
+            collision_type = "out_of_track"
+        elif obstacle_hits and wall_hit:
+            collision_type = "wall_and_obstacle"
+        elif obstacle_hits:
+            collision_type = "obstacle"
+        elif wall_hit:
+            collision_type = "wall"
+        else:
+            collision_type = None
+        return ClearanceResult(
+            collision,
+            collision_type,
+            obstacle_hits[0] if obstacle_hits else None,
+            min(obstacle_clearance, wall_clearance),
+            obstacle_clearance,
+            wall_clearance,
+        )
 
     def _clearance(self, footprint: Polygon, data: PlannerInput) -> tuple[bool,float,float,float]:
-        obstacle=math.inf; wall=math.inf; collision=False
-        for item in data.visible_obstacles:
-            distance=polygon_distance(footprint,item.polygon()); obstacle=min(obstacle,distance); collision |= distance<=1e-9
-        for item in data.visible_walls:
-            distance=polygon_segment_distance(footprint,item.start,item.end)-item.thickness_cm/2; wall=min(wall,distance); collision |= distance<=1e-9
-        if data.drivable_boundary:
-            collision |= not all(point_in_polygon(p,data.drivable_boundary) for p in footprint)
-            wall=min(wall,min(point_segment_distance(p,a,b) for p in footprint for a,b in zip(data.drivable_boundary,data.drivable_boundary[1:]+data.drivable_boundary[:1])))
-        return collision,min(obstacle,wall),obstacle,wall
+        """Compatibilidad para telemetría: el cálculo real está fusionado."""
+        result = self._evaluate_footprint(footprint, self._geometry_cache(data))
+        return (
+            result.collision,
+            result.min_clearance_cm,
+            result.obstacle_clearance_cm,
+            result.wall_clearance_cm,
+        )
+
+    def _refresh_candidate_clearance(
+        self, candidate: CandidateTrajectory, cache: GeometryCache,
+    ) -> None:
+        """Actualiza una trayectoria creada con la API legacy de ``simulate``."""
+        candidate.geometry_cache = cache
+        candidate.minimum_clearance_cm = math.inf
+        candidate.minimum_obstacle_clearance_cm = math.inf
+        candidate.minimum_wall_clearance_cm = math.inf
+        candidate.physical_collision = False
+        candidate.hard_failure = False
+        candidate.collision_type = None
+        candidate.collision_object_id = None
+        refreshed = []
+        for point in candidate.trajectory_points:
+            clearance = self._evaluate_footprint(point.footprint, cache)
+            refreshed.append(replace(point, clearance=clearance))
+            self._accumulate_clearance(candidate, clearance)
+        candidate.trajectory_points = refreshed
 
     def _passed_target(
         self,
         candidate: CandidateTrajectory,
         data: PlannerInput,
         target: VisibleObstacle,
+        cache: GeometryCache | None = None,
     ) -> bool:
         tangent=self._target_tangent(data,target)
         forward=(math.cos(tangent),math.sin(tangent))
+        target_polygon = self._cached_obstacle_polygon(target, cache)
         obstacle_front=max(
-            p[0]*forward[0]+p[1]*forward[1] for p in target.polygon()
+            p[0]*forward[0]+p[1]*forward[1] for p in target_polygon
         )
+        final_footprint = candidate.final_footprint
+        if final_footprint is None and candidate.trajectory_points:
+            final_footprint = candidate.trajectory_points[-1].footprint
+        if final_footprint is None:
+            return False
         final_rear=min(
             p[0]*forward[0]+p[1]*forward[1]
-            for p in candidate.trajectory_points[-1].footprint
+            for p in final_footprint
         )
-        return final_rear > obstacle_front + self.tuning.safety_margins.hard_rear_cm
+        return final_rear > obstacle_front + self._hard_clearance("rear")
 
-    def _correct_side(self,candidate:CandidateTrajectory,data:PlannerInput)->bool:
-        target=self._nearest(data)
-        if not target or target.color.lower() not in {"red","green"}: return True
-        tangent=self._target_tangent(data,target);right=(-math.sin(tangent),math.cos(tangent))
-        if not self._passed_target(candidate, data, target):
+    def obstacle_passed_now(
+        self, data: PlannerInput, target: VisibleObstacle,
+        cache: GeometryCache | None = None,
+    ) -> bool:
+        """Confirma PASSED con la pose actual y el footprint completo.
+
+        Se usa para liberar un objetivo que ya salió del FOV. La desaparición
+        por sí sola nunca lo marca como superado: también se exige que el
+        borde trasero haya rebasado el obstáculo y que el footprint completo
+        esté en el lado reglamentario.
+        """
+        candidate = CandidateTrajectory(
+            "CURRENT_POSE", None, (), final_state=data.vehicle_state,
+            final_footprint=self.geometry.footprint(data.vehicle_state),
+            target_obstacle_id=target.object_id,
+        )
+        if not self._passed_target(candidate, data, target, cache):
+            return False
+        pass_target = self._pass_target(data, target)
+        if pass_target is None:
+            return False
+        return footprint_side(
+            candidate.final_footprint or (),
+            self._cached_obstacle_polygon(target, cache),
+            pass_target.forward_vector,
+        ) is pass_target.side
+
+    def _candidate_target(
+        self, candidate: CandidateTrajectory, data: PlannerInput,
+    ) -> VisibleObstacle | None:
+        known = self._known_obstacles(data)
+        if candidate.target_obstacle_id is not None:
+            target = next(
+                (item for item in known
+                 if item.object_id == candidate.target_obstacle_id),
+                None,
+            )
+            if target is not None:
+                return target
+        return self._nearest(data)
+
+    def _correct_side(
+        self, candidate:CandidateTrajectory,data:PlannerInput,
+        cache: GeometryCache | None = None,
+    )->bool:
+        target=self._candidate_target(candidate, data)
+        pass_target = self._pass_target(data, target) if target else None
+        if not target or pass_target is None:
             return True
-        closest=min(candidate.trajectory_points,key=lambda p:math.dist((p.state.x_cm,p.state.y_cm),(target.x_cm,target.y_cm)))
-        lateral=(closest.state.x_cm-target.x_cm)*right[0]+(closest.state.y_cm-target.y_cm)*right[1]
-        return lateral>0 if target.color.lower()=="red" else lateral<0
+        if not self._passed_target(candidate, data, target, cache):
+            return True
+        if candidate.trajectory_points:
+            closest_footprint = min(
+                candidate.trajectory_points,
+                key=lambda p: math.dist(
+                    (p.state.x_cm, p.state.y_cm),
+                    (target.x_cm, target.y_cm),
+                ),
+            ).footprint
+        else:
+            closest_footprint = candidate.closest_target_footprint or candidate.final_footprint
+        if closest_footprint is None:
+            return True
+        actual_side = footprint_side(
+            closest_footprint,
+            self._cached_obstacle_polygon(target, cache),
+            pass_target.forward_vector,
+        )
+        return actual_side is pass_target.side
 
-    def validate(self,candidate:CandidateTrajectory,data:PlannerInput)->None:
+    @staticmethod
+    def _cached_obstacle_polygon(
+        target: VisibleObstacle, cache: GeometryCache | None,
+    ) -> Polygon:
+        if cache is not None:
+            for object_id, polygon in cache.obstacle_polygons:
+                if object_id == target.object_id:
+                    return polygon
+        return target.polygon()
+
+    def _record_pass_diagnostics(
+        self, candidate: CandidateTrajectory, data: PlannerInput,
+        cache: GeometryCache | None = None,
+    ) -> bool:
+        """Registra el estado lateral; la simulación decide la validez.
+
+        No estima futuros radios ni invalida candidatos antes de que la
+        trayectoria simulada alcance el obstáculo. Solo cuando el footprint
+        lo supera existe un lado real que pueda ser correcto o incorrecto.
+        """
+        target = self._candidate_target(candidate, data)
+        pass_target = self._pass_target(data, target) if target else None
+        if not target or pass_target is None or (
+            not candidate.trajectory_points and candidate.final_state is None
+        ):
+            return True
+        final = candidate.final_state or candidate.trajectory_points[-1].state
+        current_lateral = self._lateral_offset(
+            (final.x_cm, final.y_cm), (target.x_cm, target.y_cm), pass_target,
+        )
+        lateral_error = self._pass_boundary_error(current_lateral, pass_target)
+        candidate.target_obstacle_id = target.object_id
+        candidate.desired_pass_side = pass_target.side
+        candidate.current_lateral_offset_cm = current_lateral
+        candidate.target_lateral_offset_cm = pass_target.target_lateral_offset_cm
+        candidate.lateral_error_cm = lateral_error
+
+        candidate.pass_side_feasible = (
+            self._correct_side(candidate, data, cache)
+            if self._passed_target(candidate, data, target, cache) else True
+        )
+        return candidate.pass_side_feasible
+
+    def validate(
+        self,
+        candidate: CandidateTrajectory,
+        data: PlannerInput,
+        *,
+        enforce_pass_side: bool = True,
+        cache: GeometryCache | None = None,
+    ) -> None:
         if candidate.rejection_reason:return
+        cache = cache or self._geometry_cache(data)
+        if candidate.geometry_cache is not cache:
+            self._refresh_candidate_clearance(candidate, cache)
         # La separación medida entre dos footprints es lateral en los
         # corredores de paso. El margen frontal se usa para anticipar la
         # maniobra, no para estrechar artificialmente todo el corredor.
-        hard=self.tuning.safety_margins.hard_side_cm
-        for point in candidate.trajectory_points:
-            collision,clearance,obstacle,wall=self._clearance(point.footprint,data)
-            candidate.minimum_clearance_cm=min(candidate.minimum_clearance_cm,clearance); candidate.minimum_obstacle_clearance_cm=min(candidate.minimum_obstacle_clearance_cm,obstacle); candidate.minimum_wall_clearance_cm=min(candidate.minimum_wall_clearance_cm,wall)
-            if collision: candidate.physical_collision=True; candidate.rejection_reason="collision"; return
-            if clearance+NUMERICAL_CLEARANCE_TOLERANCE_CM<hard: candidate.rejection_reason="clearance"; return
-        candidate.correct_pass_side=self._correct_side(candidate,data)
-        if not candidate.correct_pass_side:candidate.rejection_reason="wrong_pass_side";return
-        initial,final=data.vehicle_state,candidate.trajectory_points[-1].state
+        hard=self._hard_clearance("side")
+        if candidate.physical_collision:
+            collision_type = candidate.collision_type
+            if (
+                collision_type in {"wall", "wall_and_obstacle", "out_of_track"}
+                or not self.tuning.allow_physical_collisions
+            ):
+                candidate.rejection_reason = "collision"
+                candidate.diagnostic_rejection_reason = {
+                    "obstacle": "PHYSICAL_COLLISION",
+                    "wall": "WALL_COLLISION",
+                    "wall_and_obstacle": "WALL_COLLISION",
+                    "out_of_track": "OUT_OF_TRACK",
+                }.get(collision_type or "", "PHYSICAL_COLLISION")
+                return
+        if candidate.minimum_clearance_cm + NUMERICAL_CLEARANCE_TOLERANCE_CM < hard:
+            candidate.rejection_reason="clearance"
+            candidate.diagnostic_rejection_reason="PHYSICAL_COLLISION"
+            return
+        # Una sonda REVERSE solo valida que pueda crear espacio físico. El
+        # lado obligatorio se comprueba en el forward que se genera desde su
+        # pose final; exigirlo durante el retroceso impediría probar 2/5/10.
+        if not enforce_pass_side:
+            candidate.recovery_probe_valid = candidate.rejection_reason is None
+            return
+        self._record_pass_diagnostics(candidate, data, cache)
+        candidate.correct_pass_side=self._correct_side(candidate,data,cache)
+        target = self._candidate_target(candidate, data)
+        if (target is not None and self._passed_target(candidate, data, target, cache)
+                and not candidate.correct_pass_side):
+            candidate.rejection_reason="wrong_pass_side"
+            candidate.diagnostic_rejection_reason="WRONG_PASS_SIDE"
+            return
+        initial = data.vehicle_state
+        final = candidate.final_state or candidate.trajectory_points[-1].state
         desired=data.desired_heading_rad if data.desired_heading_rad is not None else initial.heading_rad
         candidate.progress_cm=(final.x_cm-initial.x_cm)*math.cos(desired)+(final.y_cm-initial.y_cm)*math.sin(desired)
         candidate.final_heading_error_deg=abs(math.degrees(normalize_angle(final.heading_rad-desired)))
         steer=[p.steering_angle_deg for p in candidate.primitives]
         candidate.steering_effort=sum(abs(p.steering_angle_deg)*p.distance_cm for p in candidate.primitives)
         candidate.steering_changes=sum(abs(b-a) for a,b in zip(steer,steer[1:]))
-        preferred=max(self.tuning.safety_margins.preferred_front_cm,self.tuning.safety_margins.preferred_side_cm,self.tuning.safety_margins.preferred_rear_cm)
-        candidate.score=min(candidate.minimum_clearance_cm,preferred)*12+candidate.progress_cm*2-candidate.final_heading_error_deg*2.5-candidate.steering_effort*.01-candidate.steering_changes*.3-candidate.length_cm*.05
+        preferred=self.tuning.preferred_clearance_cm
+        reverse_distance=sum(
+            primitive.distance_cm for primitive in candidate.primitives
+            if primitive.kind is PrimitiveType.REVERSE
+        )
+        candidate.score = score_trajectory(
+            minimum_clearance_cm=candidate.minimum_clearance_cm,
+            preferred_clearance_cm=preferred,
+            progress_cm=candidate.progress_cm,
+            final_heading_error_deg=candidate.final_heading_error_deg,
+            steering_effort=candidate.steering_effort,
+            steering_changes=candidate.steering_changes,
+            length_cm=candidate.length_cm,
+            reverse_distance_cm=reverse_distance,
+            physical_collision=candidate.physical_collision,
+            allow_collisions=self.tuning.allow_physical_collisions,
+            weights=self.tuning.score_weights,
+        )
         candidate.safe=True
 
     @staticmethod
     def command_for(candidate:CandidateTrajectory)->ControlCommand:
         primitive=candidate.primitives[0];return ControlCommand(primitive.target_speed_cm_s,primitive.steering_angle_deg)
 
-    def plan(self,data:PlannerInput)->PlannerResult:
-        started=time.perf_counter()
+    @staticmethod
+    def _is_reverse_candidate(candidate: CandidateTrajectory) -> bool:
+        return bool(candidate.primitives and candidate.primitives[0].kind is PrimitiveType.REVERSE)
+
+    def _no_safe_detail(
+        self, candidates: Sequence[CandidateTrajectory], budget_exhausted: bool,
+        reverse_attempted: bool,
+    ) -> str:
+        """Clasifica el motivo dominante sin convertirlo en un soft score."""
+        if budget_exhausted:
+            return "CANDIDATE_BUDGET_EXHAUSTED"
+        reasons = [
+            candidate.diagnostic_rejection_reason
+            for candidate in candidates
+            if candidate.diagnostic_rejection_reason is not None
+        ]
+        if reasons and all(reason in {"PHYSICAL_COLLISION", "WALL_COLLISION"}
+                           for reason in reasons):
+            return "ALL_COLLISION"
+        if reasons and all(reason == "OUT_OF_TRACK" for reason in reasons):
+            return "OUT_OF_TRACK"
+        if reasons and all(reason == "KINEMATIC_LIMIT" for reason in reasons):
+            return "KINEMATIC_LIMIT"
+        reverse = [candidate for candidate in candidates if self._is_reverse_candidate(candidate)]
+        if reverse_attempted and not any(candidate.safe for candidate in reverse):
+            return "NO_REVERSE_RECOVERY"
+        return "UNKNOWN"
+
+    def _budget_available(self, started: float, evaluated: int) -> bool:
+        return (
+            self.tuning.planning_budget_mode != "time"
+            or evaluated == 0
+            or (time.perf_counter() - started) * 1000 < self.tuning.max_planning_time_ms
+        )
+
+    def _evaluate(
+        self, initial: VehicleState, candidate: CandidateTrajectory, data: PlannerInput,
+        cache: GeometryCache | None = None, *, already_simulated: bool = False,
+    ) -> None:
+        cache = cache or self._geometry_cache(data)
+        if not already_simulated:
+            self.simulate(initial, candidate, cache)
+        self.validate(candidate, data, cache=cache)
+
+    def _recovery_input(self, data: PlannerInput, state: VehicleState) -> PlannerInput:
+        return PlannerInput(
+            vehicle_state=state,
+            visible_obstacles=data.visible_obstacles,
+            visible_walls=data.visible_walls,
+            drivable_boundary=data.drivable_boundary,
+            track_direction=data.track_direction,
+            desired_heading_rad=data.desired_heading_rad,
+            timestamp_s=data.timestamp_s,
+            route_centerline=data.route_centerline,
+            tracked_obstacles=data.tracked_obstacles,
+            active_target_id=data.active_target_id,
+        )
+
+    def revalidate_committed(
+        self, data: PlannerInput, candidate: CandidateTrajectory
+    ) -> PlannerResult | None:
+        """Valida la parte restante de un commitment sin generar alternativas."""
+        self._evaluate(data.vehicle_state, candidate, data)
+        if not candidate.safe:
+            return None
+        command = self.command_for(candidate)
+        diagnostics = PlannerDiagnostics(
+            candidates_generated=1,
+            candidates_evaluated=1,
+            minimum_clearance_cm=candidate.minimum_clearance_cm,
+            minimum_obstacle_clearance_cm=candidate.minimum_obstacle_clearance_cm,
+            minimum_wall_clearance_cm=candidate.minimum_wall_clearance_cm,
+            selected_candidate_id=candidate.candidate_id,
+            committed_candidate_id=candidate.candidate_id,
+            selected_angle_deg=command.steering_angle_deg,
+            selected_speed_cm_s=command.target_speed_cm_s,
+            selected_radius_cm=self.geometry.turning_radius_cm(command.steering_angle_deg),
+            reason="committed_safe_trajectory",
+            active_target_id=data.active_target_id,
+            target_obstacle_id=candidate.target_obstacle_id,
+            desired_pass_side=(
+                candidate.desired_pass_side.value if candidate.desired_pass_side else None
+            ),
+            current_lateral_offset_cm=candidate.current_lateral_offset_cm,
+            target_lateral_offset_cm=candidate.target_lateral_offset_cm,
+            lateral_error_cm=candidate.lateral_error_cm,
+            pass_side_feasible=candidate.pass_side_feasible,
+        )
+        state = (
+            PlannerState.FOLLOW
+            if candidate.primitives[0].kind is PrimitiveType.STRAIGHT
+            else PlannerState.MANEUVERING
+        )
+        return PlannerResult(command, state, [candidate], candidate, diagnostics, diagnostics.reason)
+
+    def plan(self, data: PlannerInput) -> PlannerResult:
+        """GENERAR -> SIMULAR -> VALIDAR -> SCORE -> SELECCIONAR."""
+        started = time.perf_counter()
+        self._cycle_stats = {
+            "simulation_calls": 0,
+            "segment_simulations": 0,
+            "clearance_evaluations": 0,
+        }
+        cache = self._geometry_cache(data)
+        candidates: list[CandidateTrajectory] = []
+        budget_exhausted = False
+        reverse_attempted = False
+
+        # Diagnóstico únicamente; no compite ni puede reemplazar STRAIGHT.
+        projection = self._straight(FIXED_RULES.forward_projection_cm)
+        self._evaluate(data.vehicle_state, projection, data, cache)
+
         target = self._nearest(data)
-        straight=self._straight();self.simulate(data.vehicle_state,straight);self.validate(straight,data)
-        if target is not None:
-            straight.correct_pass_side = self._correct_side(straight, data)
-        straight_projection_safe=straight.safe
-        heading_error=(abs(math.degrees(normalize_angle(
-            (data.desired_heading_rad if data.desired_heading_rad is not None else data.vehicle_state.heading_rad)
-            - data.vehicle_state.heading_rad))))
-        if (straight.safe and target is None
-                and heading_error>FIXED_RULES.route_alignment_tolerance_deg):
-            straight.safe=False;straight.rejection_reason="route_heading"
-        if (straight.safe and target is not None
-                and abs(normalize_angle(
-                    self._target_tangent(data, target) - self._track_tangent(data)
-                )) > math.radians(45.0)
-                and not self._passed_target(straight, data, target)):
-            straight.safe=False;straight.rejection_reason="corner_target_ahead"
-        candidates=[straight]; generated_count=1; budget_exhausted=False
-        if not straight.safe:
-            obstacle_path_is_already_valid = (
-                target is not None
-                and abs(normalize_angle(
-                    self._target_tangent(data, target) - self._track_tangent(data)
-                )) <= math.radians(45.0)
-                and straight.correct_pass_side
-                and straight.minimum_obstacle_clearance_cm
-                    + NUMERICAL_CLEARANCE_TOLERANCE_CM
-                    >= self.tuning.safety_margins.hard_side_cm
+        aligned = (
+            data.desired_heading_rad is None
+            or abs(math.degrees(normalize_angle(
+                data.vehicle_state.heading_rad - data.desired_heading_rad,
+            ))) <= FIXED_RULES.route_alignment_tolerance_deg
+        )
+        fast_path = target is None and aligned and projection.safe
+        if fast_path:
+            fast_candidate = self._straight_beam_candidate(data, cache)
+            self._evaluate(
+                data.vehicle_state, fast_candidate, data, cache,
+                already_simulated=True,
             )
-            primary=(
-                self._pass_then_route_candidates(data, target)
-                if obstacle_path_is_already_valid and target is not None
-                else self._avoidance(data)
+            if fast_candidate.safe:
+                forward_candidates = [fast_candidate]
+            else:
+                fast_path = False
+                forward_candidates = self._forward_candidates(data, cache=cache)
+        else:
+            forward_candidates = self._forward_candidates(data, cache=cache)
+        for candidate in forward_candidates:
+            if len(candidates) >= self.tuning.max_candidates or not self._budget_available(started, len(candidates)):
+                budget_exhausted = True
+                break
+            if not candidate.safe:
+                self._evaluate(
+                    data.vehicle_state, candidate, data, cache,
+                    already_simulated=True,
+                )
+            candidates.append(candidate)
+
+        forward_safe = [
+            candidate for candidate in candidates
+            if candidate.safe and not self._is_reverse_candidate(candidate)
+        ]
+        if not forward_safe and not budget_exhausted:
+            # Los ángulos históricos siguen siendo una segunda familia de
+            # predicciones. Solo se exploran cuando la familia principal no
+            # encuentra una trayectoria forward válida.
+            legacy_candidates = self._forward_candidates(
+                data, cache=cache, legacy_angles=True,
             )
-            generated=(self._local_candidates(
-                data, target, obstacle_path_is_already_valid
-            ) + primary)[:max(0,self.tuning.max_candidates-1)]
-            generated_count += len(generated)
-            for candidate in generated:
-                if ((time.perf_counter()-started)*1000 >= self.tuning.max_planning_time_ms
-                        and len(candidates)>1):
-                    budget_exhausted=True
+            for candidate in legacy_candidates:
+                if (
+                    len(candidates) >= self.tuning.max_candidates
+                    or not self._budget_available(started, len(candidates))
+                ):
+                    budget_exhausted = True
                     break
-                self.simulate(data.vehicle_state,candidate);self.validate(candidate,data);candidates.append(candidate)
-        safe=[c for c in candidates if c.safe]
-        forward_safe=[c for c in safe if not c.candidate_id.startswith("REVERSE_")]
-        selectable=forward_safe or safe
-        best=max(selectable,key=lambda c:c.score,default=None)
-        command=self.command_for(best) if best else ControlCommand(0,0)
-        state=PlannerState.FOLLOW if best is straight else PlannerState.MANEUVERING if best else PlannerState.NO_SAFE_TRAJECTORY
-        diagnostics=PlannerDiagnostics((time.perf_counter()-started)*1000,generated_count,len(candidates),
-            sum(c.rejection_reason=="collision" for c in candidates),sum(c.rejection_reason in {"clearance","wrong_pass_side"} for c in candidates),sum(c.rejection_reason in {"kinematics","simulation_limit"} for c in candidates),
-            min((c.minimum_clearance_cm for c in candidates),default=math.inf),min((c.minimum_obstacle_clearance_cm for c in candidates),default=math.inf),min((c.minimum_wall_clearance_cm for c in candidates),default=math.inf),
-            best.candidate_id if best else None,None,command.steering_angle_deg,command.target_speed_cm_s,self.geometry.turning_radius_cm(command.steering_angle_deg),straight_projection_safe,
-            "straight_clear" if best is straight else "route_or_avoidance_candidate" if best else "no_safe_trajectory")
-        diagnostics.budget_exhausted=budget_exhausted
-        diagnostics.budget_reason="max_planning_time_ms" if budget_exhausted else None
-        return PlannerResult(command,state,candidates,best,diagnostics,diagnostics.reason)
+                if not candidate.safe:
+                    self._evaluate(
+                        data.vehicle_state, candidate, data, cache,
+                        already_simulated=True,
+                    )
+                candidates.append(candidate)
+            forward_safe = [
+                candidate for candidate in candidates
+                if candidate.safe and not self._is_reverse_candidate(candidate)
+            ]
+        if forward_safe:
+            best = max(forward_safe, key=lambda candidate: candidate.score)
+        else:
+            reverse_attempted = True
+            for probe in self._reverse_probes(data):
+                if len(candidates) >= self.tuning.max_candidates or not self._budget_available(started, len(candidates)):
+                    budget_exhausted = True
+                    break
+                self.simulate(data.vehicle_state, probe, cache)
+                self.validate(probe, data, enforce_pass_side=False, cache=cache)
+                candidates.append(probe)
+                if not probe.recovery_probe_valid:
+                    continue
+
+                recovery_data = self._recovery_input(
+                    data, probe.final_state or probe.trajectory_points[-1].state,
+                )
+                remaining_prediction_cm = max(
+                    0.0,
+                    self.tuning.planning_horizon_cm
+                    - self._reverse_distance(probe),
+                )
+                for forward in self._forward_candidates(
+                    recovery_data, remaining_prediction_cm, cache,
+                ):
+                    if len(candidates) >= self.tuning.max_candidates or not self._budget_available(started, len(candidates)):
+                        budget_exhausted = True
+                        break
+                    recovery = self._combine_recovery_candidate(probe, forward)
+                    self.validate(recovery, data, cache=cache)
+                    candidates.append(recovery)
+                if any(
+                    candidate.safe and self._is_reverse_candidate(candidate)
+                    for candidate in candidates
+                    if self._reverse_distance(candidate) == self._reverse_distance(probe)
+                ):
+                    break
+                if budget_exhausted:
+                    break
+
+            recovery_safe = [
+                candidate for candidate in candidates
+                if candidate.safe and self._is_reverse_candidate(candidate)
+            ]
+            best = min(
+                recovery_safe,
+                key=lambda candidate: (self._reverse_distance(candidate), -candidate.score),
+                default=None,
+            )
+
+        command = self.command_for(best) if best else ControlCommand(0.0, 0.0)
+        state = (
+            PlannerState.NO_SAFE_TRAJECTORY if best is None else
+            PlannerState.FOLLOW if all(
+                primitive.kind is PrimitiveType.STRAIGHT
+                for primitive in best.primitives
+            ) else PlannerState.MANEUVERING
+        )
+        diagnostics = PlannerDiagnostics(
+            calculation_time_ms=(time.perf_counter() - started) * 1000,
+            candidates_generated=len(candidates),
+            candidates_evaluated=len(candidates),
+            rejected_collision=sum(candidate.rejection_reason == "collision" for candidate in candidates),
+            rejected_clearance=sum(candidate.rejection_reason == "clearance" for candidate in candidates),
+            rejected_kinematics=sum(candidate.rejection_reason in {"kinematics", "simulation_limit"} for candidate in candidates),
+            minimum_clearance_cm=min((candidate.minimum_clearance_cm for candidate in candidates), default=math.inf),
+            minimum_obstacle_clearance_cm=min((candidate.minimum_obstacle_clearance_cm for candidate in candidates), default=math.inf),
+            minimum_wall_clearance_cm=min((candidate.minimum_wall_clearance_cm for candidate in candidates), default=math.inf),
+            selected_candidate_id=best.candidate_id if best else None,
+            selected_angle_deg=command.steering_angle_deg,
+            selected_speed_cm_s=command.target_speed_cm_s,
+            selected_radius_cm=self.geometry.turning_radius_cm(command.steering_angle_deg),
+            straight_projection_safe=projection.safe,
+            reason="forward_candidate" if best and not self._is_reverse_candidate(best)
+            else "reverse_recovery" if best else "NO_SAFE_TRAJECTORY",
+            budget_exhausted=budget_exhausted,
+            budget_reason=(
+                "max_planning_time_ms" if budget_exhausted and self.tuning.planning_budget_mode == "time"
+                else "max_candidates" if budget_exhausted else None
+            ),
+            active_target_id=data.active_target_id,
+            no_safe_reason="ALL_FORWARD_AND_REVERSE_INVALID" if best is None else None,
+            no_safe_detail=self._no_safe_detail(candidates, budget_exhausted, reverse_attempted) if best is None else None,
+            simulation_calls=self._cycle_stats["simulation_calls"],
+            segment_simulations=self._cycle_stats["segment_simulations"],
+            clearance_evaluations=self._cycle_stats["clearance_evaluations"],
+            fast_path=fast_path,
+            diagnostic_level=self.tuning.diagnostic_level,
+        )
+        forward_candidates = [candidate for candidate in candidates if not self._is_reverse_candidate(candidate)]
+        reverse_candidates = [candidate for candidate in candidates if self._is_reverse_candidate(candidate)]
+        diagnostics.forward_candidates_generated = len(forward_candidates)
+        diagnostics.forward_candidates_valid = sum(candidate.safe for candidate in forward_candidates)
+        diagnostics.reverse_candidates_generated = len(reverse_candidates)
+        diagnostics.reverse_candidates_valid = sum(candidate.safe for candidate in reverse_candidates)
+        diagnostics.reverse_recovery_attempted = bool(best and self._is_reverse_candidate(best))
+        diagnostics.reverse_distance_cm = self._reverse_distance(best) if best and self._is_reverse_candidate(best) else 0.0
+
+        rejection_reasons: dict[str, int] = {}
+        forward_rejections: dict[str, int] = {}
+        reverse_rejections: dict[str, int] = {}
+        for candidate in candidates:
+            reason = candidate.diagnostic_rejection_reason
+            if reason is None:
+                continue
+            rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+            bucket = reverse_rejections if self._is_reverse_candidate(candidate) else forward_rejections
+            bucket[reason] = bucket.get(reason, 0) + 1
+        diagnostics.rejection_reasons = rejection_reasons
+        diagnostics.forward_rejections = forward_rejections
+        diagnostics.reverse_rejections = reverse_rejections
+        if self.tuning.diagnostic_level != "off":
+            diagnostics.candidate_diagnostics = [
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "primitive": candidate.primitives[0].kind.value,
+                    "valid": candidate.safe,
+                    "recovery_probe_valid": candidate.recovery_probe_valid,
+                    "rejection_reason": candidate.diagnostic_rejection_reason,
+                    "collision_type": candidate.collision_type,
+                    "collision_object_id": candidate.collision_object_id,
+                    "target_obstacle_id": candidate.target_obstacle_id,
+                    "desired_pass_side": candidate.desired_pass_side.value if candidate.desired_pass_side else None,
+                    "current_lateral_offset_cm": candidate.current_lateral_offset_cm,
+                    "target_lateral_offset_cm": candidate.target_lateral_offset_cm,
+                    "lateral_error_cm": candidate.lateral_error_cm,
+                }
+                for candidate in candidates
+            ]
+        rejected = next((candidate for candidate in candidates if candidate.rejection_reason), None)
+        if rejected is not None:
+            first = rejected.primitives[0]
+            diagnostics.representative_rejected_candidate = {
+                "candidate_id": rejected.candidate_id,
+                "primitive": first.kind.value,
+                "steering_deg": first.steering_angle_deg,
+                "predicted_min_clearance_cm": rejected.minimum_clearance_cm if math.isfinite(rejected.minimum_clearance_cm) else None,
+                "predicted_collision": rejected.physical_collision,
+                "rejection_reason": rejected.diagnostic_rejection_reason,
+                "collision_type": rejected.collision_type,
+                "collision_object_id": rejected.collision_object_id,
+            }
+        reference = best or next((candidate for candidate in candidates if candidate.target_obstacle_id), None)
+        if reference is not None:
+            diagnostics.target_obstacle_id = reference.target_obstacle_id
+            diagnostics.desired_pass_side = reference.desired_pass_side.value if reference.desired_pass_side else None
+            diagnostics.current_lateral_offset_cm = reference.current_lateral_offset_cm
+            diagnostics.target_lateral_offset_cm = reference.target_lateral_offset_cm
+            diagnostics.lateral_error_cm = reference.lateral_error_cm
+            diagnostics.pass_side_feasible = reference.pass_side_feasible
+        if self.tuning.diagnostic_level != "full":
+            for candidate in candidates:
+                candidate.points.clear()
+                candidate.trajectory_points.clear()
+        if self.tuning.diagnostic_level == "off":
+            diagnostics.candidate_diagnostics = []
+            diagnostics.representative_rejected_candidate = None
+        return PlannerResult(command, state, candidates, best, diagnostics, diagnostics.reason)
 
     def collision_metrics(self,state:VehicleState,data:PlannerInput)->tuple[bool,float,float,float]:
         return self._clearance(self.geometry.footprint(state),data)

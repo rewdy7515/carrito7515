@@ -1,0 +1,32 @@
+{
+  "scenario_index": 7,
+  "base_seed": 20260815,
+  "effective_seed": 20260822,
+  "scenario_seed": 20260822,
+  "scenario_mode": 2,
+  "deterministic": true,
+  "completed_lap": false,
+  "collision": false,
+  "lap_time_s": null,
+  "min_clearance_cm": 3.146,
+  "distance_traveled_cm": 238.6875,
+  "reverse_count": 0,
+  "rule_violations": [],
+  "obstacles_passed": 0,
+  "obstacle_pass_counts": {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0
+  },
+  "all_obstacles_crossed_three_times": false,
+  "termination_reason": "running",
+  "failure_location": {
+    "lap": 1,
+    "straight": 1,
+    "step": 593
+  },
+  "steps": 593,
+  "simulation_time_s": 29.65
+}

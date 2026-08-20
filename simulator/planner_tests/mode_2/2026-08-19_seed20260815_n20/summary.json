@@ -1,0 +1,25 @@
+{
+  "scenarios": 10,
+  "scenarios_completed": 1,
+  "success_rate": 10.0,
+  "total_collisions": 7,
+  "wall_collisions": 0,
+  "obstacle_collisions": 7,
+  "rule_broken": 0,
+  "object_not_detected": 9,
+  "no_safe_trajectory": 2,
+  "timeout": 0,
+  "stuck": 0,
+  "total_laps_completed": 3,
+  "total_straights_completed": 29,
+  "mean_straights_completed": 2.9,
+  "mean_laps_completed": 0.3,
+  "min_clearance_cm": {
+    "overall_min": 0.0,
+    "mean": 0.7,
+    "wall_min": 0.0,
+    "obstacle_min": 0.0
+  },
+  "planning_budget_mode": "candidate_count",
+  "safety_margins_disabled": true
+}

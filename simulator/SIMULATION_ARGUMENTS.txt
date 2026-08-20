@@ -1,0 +1,402 @@
+ARGUMENTOS DE EJECUCIÓN DEL SIMULADOR WRO 2026
+==============================================
+
+Proyecto:
+  /Users/andresvillarreal/Documents/carrito7515
+
+Python recomendado:
+  .venv/bin/python
+
+La configuración base del planner se carga desde:
+  config/simulator_planner_tuning.json
+
+Las medidas físicas y reglas fijas se cargan desde:
+  config/physical_measurements.json
+  simulator/planner_rules.py
+
+
+1. SIMULADOR VISUAL CON PYGAME
+------------------------------
+
+Archivo:
+  simulator/wro_simulator.py
+
+Ejecución básica:
+  .venv/bin/python simulator/wro_simulator.py
+
+Argumentos:
+
+  --fov-deg GRADOS
+      FOV horizontal de la cámara.
+      Default: 70.4
+
+  --desired-clearance-cm CM
+      Fija el margen preferred usado por el scorer en frente, lateral y
+      parte trasera.
+      Default: usa config/simulator_planner_tuning.json
+
+  --disable-safety-margins
+      Pone en cero los márgenes artificiales del planner.
+      Mantiene la geometría real del carro y la detección física de colisiones.
+      Úsalo únicamente para diagnóstico del simulador.
+
+  --planning-horizon-cm CM
+      Sobrescribe la longitud geométrica del plan completo.
+      Default: 50 cm
+
+  --execution-horizon-min-cm CM
+      Distancia mínima ejecutada antes de comparar nuevamente los planes.
+      Default: 6 cm
+
+  --execution-horizon-max-cm CM
+      Distancia máxima ejecutada antes de comparar nuevamente los planes.
+      Default: 15 cm
+
+  --switch-margin SCORE
+      Mejora mínima de score necesaria para abandonar el plan comprometido.
+      Default: 8
+
+  --diagnostic-level {full,summary,off}
+      Nivel de información generado por el planner.
+        full     guarda trayectorias, footprints y diagnósticos completos.
+        summary  conserva métricas resumidas.
+        off      minimiza los datos de diagnóstico.
+      Default de Pygame: full
+
+  --max-candidates N
+      Sobrescribe el máximo de candidatos evaluados por ciclo.
+      Default: 256
+
+  --max-planning-time-ms MS
+      Sobrescribe el presupuesto de tiempo del planner cuando el modo de
+      presupuesto es time.
+      Default: 20 ms
+
+  --planner-config ARCHIVO.json
+      Usa otro archivo JSON de PlannerTuning.
+
+  --scenario-index N
+      Índice del escenario reproducible que se quiere visualizar.
+      El índice empieza en 0.
+
+  --scenario-seed SEED
+      Seed base para generar el escenario reproducible.
+      Default: 20260815
+
+  --scenario-mode {1,2}
+      Selecciona el tipo de pista:
+        1  pista sin obstáculos.
+        2  pista con obstáculos.
+      El modo 3 todavía está inhabilitado.
+      Default: 2
+
+  --deterministic
+      Ejecuta con simulation_dt_s fijo y sin esperar el tiempo real.
+      También usa planning_budget_mode=candidate_count.
+
+  --decision-probe
+      Activa el escenario fijo de análisis de decisiones.
+      Permite mover la pose manualmente, recalcular la percepción y revisar
+      los candidatos sin mover el carro automáticamente.
+
+  --duration-s SEGUNDOS
+      Duración virtual máxima del escenario.
+      Default: 180
+
+  --metrics-output ARCHIVO.json
+      Guarda las métricas finales de la reproducción en el archivo indicado.
+
+  --servo-command-deg GRADOS
+      Comando lógico inicial del servo.
+      Default: 92
+      Rango seguro actual: 60 a 120 grados.
+
+
+Ejemplo: reproducir un escenario determinista del modo 2
+
+  .venv/bin/python simulator/wro_simulator.py \
+    --scenario-mode 2 \
+    --scenario-seed 20260815 \
+    --scenario-index 5 \
+    --deterministic
+
+Ejemplo: reproducirlo permitiendo observar colisiones físicas
+
+  .venv/bin/python simulator/wro_simulator.py \
+    --scenario-mode 2 \
+    --scenario-seed 20260815 \
+    --scenario-index 5 \
+    --deterministic \
+    --disable-safety-margins
+
+Ejemplo: usar el decision probe
+
+  .venv/bin/python simulator/wro_simulator.py \
+    --scenario-mode 2 \
+    --scenario-seed 20260815 \
+    --scenario-index 5 \
+    --decision-probe \
+    --diagnostic-level full
+
+
+2. RUNNER HEADLESS DE ESCENARIOS
+--------------------------------
+
+Archivo:
+  simulator/planner_test_runner.py
+
+Ejecución básica:
+  .venv/bin/python simulator/planner_test_runner.py
+
+Argumentos:
+
+  --scenarios N
+      Número de escenarios a generar y ejecutar.
+      Default: 20
+
+  --seed SEED
+      Seed base.
+      El escenario i usa effective_seed = seed + i.
+      Default: 20260815
+
+  --duration-s SEGUNDOS
+      Duración virtual máxima de cada escenario.
+      Default: 180
+
+  --output-dir DIRECTORIO
+      Directorio donde se guardan config.json, summary.json,
+      scenarios.jsonl y failures.jsonl.
+      Default: /tmp/wro_planner_results
+
+  --mode {1,2,3}
+      Tipo de escenario:
+        1  pista sin obstáculos.
+        2  pista con obstáculos.
+        3  obstáculos + parking wall; actualmente inhabilitado.
+      Default: 2
+
+  --planner-config ARCHIVO.json
+      Archivo alternativo de PlannerTuning.
+
+  --planning-horizon-cm CM
+      Sobrescribe la longitud del plan completo.
+
+  --execution-horizon-min-cm CM
+      Sobrescribe la distancia mínima de ejecución entre replannings.
+
+  --execution-horizon-max-cm CM
+      Sobrescribe la distancia máxima de ejecución entre replannings.
+
+  --switch-margin SCORE
+      Sobrescribe la diferencia mínima de score para cambiar de plan.
+
+  --diagnostic-level {full,summary,off}
+      Nivel de diagnóstico.
+      Default del runner: summary
+
+  --planning-budget-mode {candidate_count,time}
+      Modo de presupuesto del planner:
+        candidate_count  reproducible; limita por cantidad de candidatos.
+        time             limita por tiempo real de cálculo.
+      Default: candidate_count
+
+  --strict-deterministic
+      Alias compatible que fuerza planning_budget_mode=candidate_count.
+
+  --disable-safety-margins
+      Desactiva los márgenes artificiales únicamente en el simulador.
+      Conserva la geometría y las colisiones físicas.
+
+  --noise-position-cm CM
+      Desviación del ruido de posición aplicado a la percepción.
+      Default: 0
+
+  --noise-heading-deg GRADOS
+      Desviación del ruido de orientación aplicado a la percepción.
+      Default: 0
+
+  --latency-s SEGUNDOS
+      Latencia artificial de las detecciones.
+      Default: 0
+
+  --dropout-probability PROBABILIDAD
+      Probabilidad de perder una detección, entre 0 y 1.
+      Default: 0
+
+
+Ejemplo: generar 5 escenarios reproducibles del modo 2
+
+  .venv/bin/python simulator/planner_test_runner.py \
+    --mode 2 \
+    --scenarios 5 \
+    --duration-s 180 \
+    --seed 20260815 \
+    --output-dir /tmp/wro-mode2
+
+Ejemplo: pruebas deterministas sin márgenes artificiales
+
+  .venv/bin/python simulator/planner_test_runner.py \
+    --mode 2 \
+    --scenarios 20 \
+    --duration-s 180 \
+    --seed 20260815 \
+    --strict-deterministic \
+    --disable-safety-margins \
+    --output-dir /tmp/wro-mode2-no-margins
+
+Ejemplo: pruebas con incertidumbre de percepción
+
+  .venv/bin/python simulator/planner_test_runner.py \
+    --mode 2 \
+    --scenarios 20 \
+    --seed 20260815 \
+    --noise-position-cm 1.0 \
+    --noise-heading-deg 2.0 \
+    --latency-s 0.10 \
+    --dropout-probability 0.05 \
+    --output-dir /tmp/wro-noisy
+
+
+3. BÚSQUEDA DE PARÁMETROS
+--------------------------
+
+Archivo:
+  simulator/planner_parameter_sweep.py
+
+Este runner prueba combinaciones de parámetros y muestra el progreso en
+consola. Guarda sweep_results.json, sweep_results.csv y
+sweep_scenario_summaries.json.
+
+Ejecución básica:
+  .venv/bin/python simulator/planner_parameter_sweep.py
+
+Argumentos:
+
+  --scenarios N
+      Número de escenarios por configuración.
+      Default: 20
+
+  --seed SEED
+      Seed base; cada índice de escenario usa seed + index.
+      Default: 20260815
+
+  --duration-s SEGUNDOS
+      Duración virtual máxima de cada escenario.
+      Default: 20
+
+  --output-dir DIRECTORIO
+      Directorio de resultados del sweep.
+      Default: /tmp/wro_planner_sweep
+
+  --planner-config ARCHIVO.json
+      Archivo JSON base de PlannerTuning.
+
+  --preferred-clearance-cm LISTA
+      Valores preferred que se comparan.
+      Separar valores con comas.
+      Default: 13,15
+
+  --planning-horizon-cm LISTA
+      Longitudes de plan que se comparan.
+      Separar valores con comas.
+      Default: 50
+
+  --beam-width LISTA
+      Anchuras del beam que se comparan.
+      Separar valores con comas.
+      Default: 4
+
+  --execution-horizon-min-cm LISTA
+      Distancias mínimas de ejecución que se comparan.
+      Separar valores con comas.
+      Default: 6
+
+  --execution-horizon-max-cm LISTA
+      Distancias máximas de ejecución que se comparan.
+      Separar valores con comas.
+      Default: 15
+
+  --switch-margin LISTA
+      Márgenes de cambio de commitment que se comparan.
+      Separar valores con comas.
+      Default: 8
+
+  --noise-position-cm CM
+      Ruido de posición de percepción.
+      Default: 0
+
+  --noise-heading-deg GRADOS
+      Ruido de orientación de percepción.
+      Default: 0
+
+  --latency-s SEGUNDOS
+      Latencia artificial de detección.
+      Default: 0
+
+  --dropout-probability PROBABILIDAD
+      Probabilidad de pérdida de detección, entre 0 y 1.
+      Default: 0
+
+
+Ejemplo: sweep pequeño
+
+  .venv/bin/python simulator/planner_parameter_sweep.py \
+    --scenarios 5 \
+    --duration-s 20 \
+    --seed 20260815 \
+    --output-dir /tmp/wro-sweep
+
+Ejemplo: sweep con varias combinaciones
+
+  .venv/bin/python simulator/planner_parameter_sweep.py \
+    --scenarios 20 \
+    --duration-s 60 \
+    --planning-horizon-cm 45,50,55 \
+    --beam-width 4,6 \
+    --execution-horizon-min-cm 6,8 \
+    --execution-horizon-max-cm 12,15 \
+    --switch-margin 6,8,10 \
+    --preferred-clearance-cm 10,13,15 \
+    --seed 20260815 \
+    --output-dir /tmp/wro-sweep
+
+
+4. ARCHIVOS DE CONFIGURACIÓN
+-----------------------------
+
+PlannerTuning editable:
+  config/simulator_planner_tuning.json
+
+Reglas físicas y medidas:
+  simulator/planner_rules.py
+  config/physical_measurements.json
+
+Resultados del runner:
+  --output-dir/config.json
+  --output-dir/summary.json
+  --output-dir/scenarios.jsonl
+  --output-dir/failures.jsonl
+
+Resultados de manual recording de Pygame:
+  config/simulator_manual_runs/manual_run_*.json
+  config/simulator_manual_runs/manual_run_*.csv
+
+Para ver todos los argumentos directamente desde cada programa:
+
+  .venv/bin/python simulator/wro_simulator.py --help
+  .venv/bin/python simulator/planner_test_runner.py --help
+  .venv/bin/python simulator/planner_parameter_sweep.py --help
+
+
+5. LIMITACIONES ACTUALES
+-------------------------
+
+  - El modo 3 está inhabilitado porque todavía no tiene configuración de
+    parking wall.
+  - La velocidad fija no se cambia mediante --fixed-speed-cm-s. La velocidad
+    física actual viene de planner_rules.py y de
+    config/physical_measurements.json.
+  - --deterministic pertenece al simulador visual.
+  - --strict-deterministic pertenece al planner_test_runner.py.
+  - El parámetro --disable-safety-margins solo debe usarse para observar
+    colisiones y near misses; no representa la configuración segura normal.
