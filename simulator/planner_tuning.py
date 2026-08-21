@@ -39,6 +39,19 @@ class PreferredSafetyMargins:
 
 
 @dataclass(frozen=True)
+class TargetSafetyClearance:
+    """Clearance objetivo soft; alcanzar este valor satura la recompensa."""
+
+    wall_cm: float = 15.0
+    obstacle_cm: float = 15.0
+
+    def validate(self) -> "TargetSafetyClearance":
+        if self.wall_cm < 0.0 or self.obstacle_cm < 0.0:
+            raise ValueError("Los clearances objetivo no pueden ser negativos")
+        return self
+
+
+@dataclass(frozen=True)
 class PlannerTuning:
     """Únicamente parámetros TUNABLE que afectan la elección del trayecto."""
 
@@ -61,6 +74,7 @@ class PlannerTuning:
     switch_margin: float = 8.0
     memory_timeout_s: float = 2.0
     preferred_safety_margins: PreferredSafetyMargins = PreferredSafetyMargins()
+    target_safety_clearance: TargetSafetyClearance = TargetSafetyClearance()
     # Pueden cambiar la decisión si se agotan; no son redundantes del beam.
     planning_budget_mode: str = "time"
     max_candidates: int = 256
@@ -75,6 +89,7 @@ class PlannerTuning:
 
     def validate(self) -> "PlannerTuning":
         self.preferred_safety_margins.validate()
+        self.target_safety_clearance.validate()
         if self.planning_horizon_cm <= 0.0:
             raise ValueError("planning_horizon_cm debe ser positivo")
         if self.prediction_segments <= 0 or self.beam_width <= 0:
@@ -191,6 +206,15 @@ def load_planner_tuning(path: str | Path | None = None) -> PlannerTuning:
         ).validate()
     elif raw_preferred is not None:
         raise ValueError("preferred_safety_margins debe ser un objeto JSON")
+
+    raw_target = values.pop("target_safety_clearance", None)
+    if isinstance(raw_target, dict):
+        values["target_safety_clearance"] = TargetSafetyClearance(
+            wall_cm=float(raw_target.get("wall_cm", 15.0)),
+            obstacle_cm=float(raw_target.get("obstacle_cm", 15.0)),
+        ).validate()
+    elif raw_target is not None:
+        raise ValueError("target_safety_clearance debe ser un objeto JSON")
 
     raw_weights = values.get("score_weights")
     if isinstance(raw_weights, dict):

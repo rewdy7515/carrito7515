@@ -24,10 +24,90 @@ except ImportError:
     from simulator.scenario import ScenarioObject, generate_scenario, seat_slot
     from simulator.track_config import INNER_WALL, OUTER_WALL, START_POSE, route_centerline, start_zone_contains, straight_sequence
 
+try:
+    from local_frame import LocalSide, crossing_side
+except ImportError:
+    from simulator.local_frame import LocalSide, crossing_side
+
 PlannerConfig = PlannerTuning
 TARGET_LAPS = 3
 STRAIGHTS_PER_LAP = 4
 TARGET_STRAIGHTS = TARGET_LAPS * STRAIGHTS_PER_LAP
+
+
+def _straight_heading(straight: str, clockwise: bool = True) -> float:
+    """Heading local de cada recta para medir cruces y lado reglamentario."""
+    if clockwise:
+        return {
+            "bottom": math.pi,
+            "left": -math.pi / 2,
+            "top": 0.0,
+            "right": math.pi / 2,
+        }[straight]
+    return {
+        "bottom": 0.0,
+        "right": math.pi / 2,
+        "top": math.pi,
+        "left": -math.pi / 2,
+    }[straight]
+
+
+def _clearance_stats(values: list[float]) -> dict[str, float | None]:
+    """Estadística determinista para una colección de clearances finitos."""
+    ordered = sorted(value for value in values if math.isfinite(value))
+    if not ordered:
+        return {key: None for key in ("min", "mean", "p5", "p10", "median")}
+
+    def percentile(fraction: float) -> float:
+        index = (len(ordered) - 1) * fraction
+        lower, upper = math.floor(index), math.ceil(index)
+        if lower == upper:
+            return ordered[lower]
+        return ordered[lower] + (ordered[upper] - ordered[lower]) * (index - lower)
+
+    return {
+        "min": min(ordered),
+        "mean": sum(ordered) / len(ordered),
+        "p5": percentile(0.05),
+        "p10": percentile(0.10),
+        "median": percentile(0.50),
+    }
+
+
+def _crossing_geometry(
+    state: VehicleState,
+    geometry: VehicleGeometry,
+    item: ScenarioObject,
+) -> tuple[str, float, float, LocalSide]:
+    """Devuelve proyecciones longitudinales y lado del footprint completo."""
+    straight, _ = seat_slot((item.x_cm, item.y_cm))
+    forward = (
+        math.cos(_straight_heading(straight)),
+        math.sin(_straight_heading(straight)),
+    )
+    vehicle_polygon = geometry.footprint(state)
+    obstacle_polygon = rectangle_polygon((
+        item.x_cm - item.width_cm / 2,
+        item.y_cm - item.length_cm / 2,
+        item.width_cm,
+        item.length_cm,
+    ))
+    vehicle_rear = min(
+        point[0] * forward[0] + point[1] * forward[1]
+        for point in vehicle_polygon
+    )
+    obstacle_front = max(
+        point[0] * forward[0] + point[1] * forward[1]
+        for point in obstacle_polygon
+    )
+    return straight, vehicle_rear, obstacle_front, crossing_side(
+        vehicle_polygon, obstacle_polygon, forward,
+    )
+
+
+def _current_lap_index(straights_completed: int) -> int:
+    """Convierte la recta actual (incluida la inicial) a índice de vuelta."""
+    return 0 if straights_completed == 0 else (straights_completed - 1) // STRAIGHTS_PER_LAP
 
 
 @dataclass
@@ -128,7 +208,23 @@ def run_scenario(seed:int,scenario_index:int,sensor:SensorModel,duration_s:float
     state=VehicleState(*START_POSE); route=route_centerline(True); walls=_walls(); boundary=rectangle_polygon(OUTER_WALL)
     command=planner.plan(PlannerInput(state,drivable_boundary=boundary)).command
     rows=[];times=[];now=next_replan=0.0;collision=completed=passed=False;correct_side=True;no_safe=0
-    collision_type=None; seen_ids:set[str]=set(); crossed_ids:set[str]=set(); passed_ids:set[str]=set()
+    collision_type=None; crossed_ids:set[str]=set(); passed_ids:set[str]=set()
+    # Métricas de eventos: un mismo obstáculo puede generar un evento por
+    # vuelta, por lo que no se usa un único ``passed`` global.
+    crossing_events: list[dict[str, Any]] = []
+    crossing_keys: set[tuple[int, str]] = set()
+    approached_keys: set[tuple[int, str]] = set()
+    seen_by_lap: dict[int, set[str]] = {}
+    reverse_count = 0
+    steering_change_samples: list[float] = []
+    previous_selected_steering: float | None = None
+    lap_times: list[float] = []
+    lap_start_time_s = 0.0
+    actual_safety_margin_violations = 0
+    actual_clearance_values: list[float] = []
+    actual_wall_clearances: list[float] = []
+    actual_obstacle_clearances: list[float] = []
+    total_candidates_evaluated = 0
     observations={item.object_id:{"ever_detected":False,"first_detection_step":None,
                                   "first_detection_distance_cm":None,
                                   "first_detection_relative_x_cm":None,
@@ -139,10 +235,12 @@ def run_scenario(seed:int,scenario_index:int,sensor:SensorModel,duration_s:float
     first_failure_step=None; first_failure_time_s=None; nearest_failure_obstacle=None
     reverse_active=False; last_diagnostics=None
     order=straight_sequence(True)[:STRAIGHTS_PER_LAP]
-    progress=0;last=None;route_valid=True
+    progress=0;last=_sector(state);route_valid=True
     while now<duration_s-1e-9:
         visible=_visible(state,objects,sensor,rng)
-        seen_ids.update(item.object_id for item in visible)
+        seen_by_lap.setdefault(_current_lap_index(progress), set()).update(
+            item.object_id for item in visible
+        )
         for item in visible:
             observation=observations[item.object_id]
             if not observation["ever_detected"]:
@@ -160,6 +258,15 @@ def run_scenario(seed:int,scenario_index:int,sensor:SensorModel,duration_s:float
                 state, command.target_speed_cm_s,
             )
             last_diagnostics=result.diagnostics
+            total_candidates_evaluated += result.diagnostics.candidates_evaluated
+            selected_steering = command.steering_angle_deg
+            if previous_selected_steering is not None:
+                steering_change_samples.append(
+                    abs(selected_steering - previous_selected_steering),
+                )
+            previous_selected_steering = selected_steering
+            if command.target_speed_cm_s < 0.0 and not reverse_active:
+                reverse_count += 1
             reverse_recovery_attempted |= result.diagnostics.reverse_recovery_attempted
             if reverse_active and command.target_speed_cm_s >= 0.0:
                 replan_after_reverse=True
@@ -180,6 +287,14 @@ def run_scenario(seed:int,scenario_index:int,sensor:SensorModel,duration_s:float
                 "minimum_obstacle_clearance_cm":None if not math.isfinite(result.diagnostics.minimum_obstacle_clearance_cm) else round(result.diagnostics.minimum_obstacle_clearance_cm,4),
                 "minimum_wall_clearance_cm":None if not math.isfinite(result.diagnostics.minimum_wall_clearance_cm) else round(result.diagnostics.minimum_wall_clearance_cm,4),
                 "planning_time_ms":round(planning_time_ms,4),"candidates_evaluated":result.diagnostics.candidates_evaluated,
+                "forward_candidates_generated":result.diagnostics.forward_candidates_generated,
+                "forward_candidates_valid":result.diagnostics.forward_candidates_valid,
+                "forward_physical_safe_count":result.diagnostics.forward_physical_safe_count,
+                "forward_correct_side_count":result.diagnostics.forward_correct_side_count,
+                "forward_wrong_side_count":result.diagnostics.forward_wrong_side_count,
+                "reverse_candidates_generated":result.diagnostics.reverse_candidates_generated,
+                "reverse_candidates_valid":result.diagnostics.reverse_candidates_valid,
+                "reverse_trigger_reason":result.diagnostics.reverse_trigger_reason,
                 "candidate_ids":"|".join(candidate.candidate_id for candidate in result.candidates),
                 "budget_exhausted":result.diagnostics.budget_exhausted,
                 "budget_reason":result.diagnostics.budget_reason or "",
@@ -224,21 +339,28 @@ def run_scenario(seed:int,scenario_index:int,sensor:SensorModel,duration_s:float
         if command.target_speed_cm_s < 0.0:
             reverse_distance_cm += math.dist((previous_state.x_cm,previous_state.y_cm),(state.x_cm,state.y_cm))
         step += 1
-        collision_now, _, obstacle_clearance, wall_clearance = planner.collision_metrics(state,data)
+        collision_now, actual_min_clearance, actual_obstacle_clearance, actual_wall_clearance = planner.collision_metrics(state, data)
+        obstacle_clearance = actual_obstacle_clearance
+        wall_clearance = actual_wall_clearance
+        if math.isfinite(actual_min_clearance):
+            actual_clearance_values.append(actual_min_clearance)
+        if math.isfinite(actual_wall_clearance):
+            actual_wall_clearances.append(actual_wall_clearance)
+        if math.isfinite(actual_obstacle_clearance):
+            actual_obstacle_clearances.append(actual_obstacle_clearance)
+        required_clearance = (
+            0.0 if tuning.disable_hard_safety_margins
+            else tuning.mandatory_clearance_cm
+        )
+        if (
+            actual_wall_clearance < required_clearance
+            or actual_obstacle_clearance < required_clearance
+        ):
+            actual_safety_margin_violations += 1
         if collision_now and collision_type is None:
             collision_type = _collision_type(obstacle_clearance, wall_clearance)
             failure_step = step
         collision |= collision_now
-        for item in objects:
-            longitudinal = ((state.x_cm-item.x_cm)*math.cos(state.heading_rad)
-                            + (state.y_cm-item.y_cm)*math.sin(state.heading_rad))
-            if longitudinal > geometry.length_cm/2:
-                crossed_ids.add(item.object_id)
-                # PASSED requiere haberlo visto y haber cruzado su posición.
-                # Un objeto cruzado sin detección se registra como fallo de
-                # percepción, pero no como maniobra completada correctamente.
-                if item.object_id in seen_ids:
-                    passed_ids.add(item.object_id)
         passed |= len(passed_ids) > 0
         sector=_sector(state)
         if sector and sector!=last:
@@ -246,6 +368,40 @@ def run_scenario(seed:int,scenario_index:int,sensor:SensorModel,duration_s:float
             if sector==expected:progress+=1
             elif progress>0:route_valid=False
             last=sector
+            if progress > 0 and progress % STRAIGHTS_PER_LAP == 0:
+                lap_times.append(now + FIXED_RULES.simulation_dt_s - lap_start_time_s)
+                lap_start_time_s = now + FIXED_RULES.simulation_dt_s
+
+        current_lap = _current_lap_index(progress)
+        for item in objects:
+            item_straight, vehicle_rear, obstacle_front, actual_side = _crossing_geometry(
+                state, geometry, item,
+            )
+            if item_straight != sector:
+                continue
+            key = (current_lap, item.object_id)
+            if vehicle_rear <= obstacle_front + FIXED_RULES.hard_rear_clearance_cm:
+                approached_keys.add(key)
+                continue
+            if key in crossing_keys or key not in approached_keys:
+                continue
+            crossing_keys.add(key)
+            expected_side = LocalSide.RIGHT if item.color.lower() == "red" else LocalSide.LEFT
+            detected = item.object_id in seen_by_lap.get(current_lap, set())
+            correct = actual_side is expected_side
+            crossing_events.append({
+                "lap": current_lap + 1,
+                "straight": item_straight,
+                "obstacle_id": item.object_id,
+                "color": item.color.upper(),
+                "detected": detected,
+                "actual_side": actual_side.value,
+                "expected_side": expected_side.value,
+                "correct": correct,
+            })
+            crossed_ids.add(item.object_id)
+            passed_ids.add(item.object_id)
+            correct_side &= correct
         completed=progress>=TARGET_STRAIGHTS and start_zone_contains(state.x_cm,state.y_cm)
         if abs(command.target_speed_cm_s) > 1.0 and abs(state.speed_cm_s) < 0.5:
             stationary_time += FIXED_RULES.simulation_dt_s
@@ -273,14 +429,47 @@ def run_scenario(seed:int,scenario_index:int,sensor:SensorModel,duration_s:float
         failure_step = first_failure_step
     elif failure_step is None:
         failure_step = step if termination_reason != "completed" else None
-    clearance_values=[r["minimum_clearance_cm"] for r in rows if r["minimum_clearance_cm"] is not None]
-    wall_values=[r["minimum_wall_clearance_cm"] for r in rows if r["minimum_wall_clearance_cm"] is not None]
-    obstacle_values=[r["minimum_obstacle_clearance_cm"] for r in rows if r["minimum_obstacle_clearance_cm"] is not None]
-    object_not_detected=any(
-        item.object_id in crossed_ids and item.object_id not in seen_ids
-        for item in objects
+    clearance_values = actual_clearance_values or [
+        r["minimum_clearance_cm"] for r in rows if r["minimum_clearance_cm"] is not None
+    ]
+    wall_values = actual_wall_clearances or [
+        r["minimum_wall_clearance_cm"] for r in rows if r["minimum_wall_clearance_cm"] is not None
+    ]
+    obstacle_values = actual_obstacle_clearances or [
+        r["minimum_obstacle_clearance_cm"] for r in rows if r["minimum_obstacle_clearance_cm"] is not None
+    ]
+    clearance_stats = {
+        "global": _clearance_stats(clearance_values),
+        "wall": _clearance_stats(wall_values),
+        "obstacle": _clearance_stats(obstacle_values),
+    }
+    incorrect_events = [event for event in crossing_events if not event["correct"]]
+    correct_events = [event for event in crossing_events if event["correct"]]
+    undetected_events = [event for event in crossing_events if not event["detected"]]
+    red_passed_left = sum(
+        event["color"] == "RED" and event["actual_side"] == "LEFT"
+        for event in incorrect_events
     )
-    rule_broken=not route_valid or not correct_side
+    green_passed_right = sum(
+        event["color"] == "GREEN" and event["actual_side"] == "RIGHT"
+        for event in incorrect_events
+    )
+    other_incorrect_passes = len(incorrect_events) - red_passed_left - green_passed_right
+    object_not_detected_count = len(undetected_events)
+    object_not_detected = object_not_detected_count > 0
+    rule_broken=not route_valid or bool(incorrect_events)
+    rule_compliance_rate = (
+        100.0 * len(correct_events) / len(crossing_events)
+        if crossing_events else 100.0
+    )
+    no_safe_percentage = 100.0 * no_safe / len(rows) if rows else 0.0
+    steering_changes_mean = (
+        sum(steering_change_samples) / len(steering_change_samples)
+        if steering_change_samples else 0.0
+    )
+    steering_changes_max = max(steering_change_samples, default=0.0)
+    strict_success = bool(completed and not collision and not incorrect_events)
+    navigation_success = bool(completed)
     failure_location=None if termination_reason == "completed" else {
         "lap": min(progress // STRAIGHTS_PER_LAP + 1, TARGET_LAPS),
         "straight": progress % STRAIGHTS_PER_LAP + 1,
@@ -295,20 +484,55 @@ def run_scenario(seed:int,scenario_index:int,sensor:SensorModel,duration_s:float
         "object_not_detected":object_not_detected,
         "selected_angle_deg":rows[-1]["selected_steering_angle_deg"] if rows else 0,"minimum_distance_cm":min((r["minimum_clearance_cm"] for r in rows if r["minimum_clearance_cm"] is not None),default=None),
         "maneuver_completed":passed,"passed":passed,"straight_progress":progress,
+        "total_obstacles_encountered":len(crossing_events),
+        "obstacles_passed_correctly":len(correct_events),
+        "obstacles_passed_incorrectly":len(incorrect_events),
+        "obstacle_rule_compliance_rate":rule_compliance_rate,
+        "object_not_detected_count":object_not_detected_count,
+        "red_passed_left":red_passed_left,
+        "green_passed_right":green_passed_right,
+        "other_incorrect_passes":other_incorrect_passes,
+        "rule_violations_per_scenario":len(incorrect_events),
+        "rule_violation_events":incorrect_events,
+        "crossing_events":crossing_events,
         "passed_object_ids":sorted(passed_ids),"crossed_object_ids":sorted(crossed_ids),
         "straights_completed":completed_straights,"target_straights":TARGET_STRAIGHTS,
         "laps_completed":min(progress // STRAIGHTS_PER_LAP, TARGET_LAPS),
         "completed":completed,"next_straight_reached":progress>=2,"lap_completed":completed,
+        "strict_success":strict_success,
+        "navigation_success":navigation_success,
+        "collision_rate":100.0 if collision else 0.0,
+        "wall_collision":collision_type in {"wall", "wall_and_obstacle"},
+        "obstacle_collision":collision_type in {"obstacle", "wall_and_obstacle"},
+        "object_not_detected_rate":100.0 if object_not_detected else 0.0,
+        "no_safe_trajectory_rate":no_safe_percentage,
         "route_progress_valid":route_valid,"correct_pass_side":correct_side,"no_safe_trajectory_cycles":no_safe,"planning_cycles":len(rows),
         "maneuvers_completed":len(passed_ids),"obstacles_passed":len(passed_ids),
         "forward_candidates_valid":last_diagnostics.forward_candidates_valid if last_diagnostics else 0,
+        "replannings":len(rows),
+        "total_candidates_evaluated":total_candidates_evaluated,
+        "no_safe_replanning_percentage":no_safe_percentage,
+        "safety_margin_violations":actual_safety_margin_violations,
+        "reverse_count":reverse_count,
+        "reverse_distance_traveled_cm":round(reverse_distance_cm,4),
+        "steering_changes_mean_deg":steering_changes_mean,
+        "steering_changes_max_deg":steering_changes_max,
+        "steering_change_samples_deg":steering_change_samples,
         "reverse_recovery_attempted":reverse_recovery_attempted,
         "reverse_distance_cm":round(reverse_distance_cm,4),
         "replan_after_reverse":replan_after_reverse,
         "recovery_success":recovery_success,
         "planner_diagnostics":jsonable(last_diagnostics) if last_diagnostics else None,
         "lap_time_s":round(now + FIXED_RULES.simulation_dt_s,4) if completed else None,
-        "distance_cm":round(distance_cm,4),"min_clearance_cm":min(clearance_values,default=None),
+        "distance_cm":round(distance_cm,4),"distance_traveled_cm":round(distance_cm,4),"min_clearance_cm":min(clearance_values,default=None),
+        "clearance_stats":clearance_stats,
+        # Se conservan internamente para calcular percentiles globales sobre
+        # el footprint realmente recorrido, no sobre candidatos rechazados.
+        "actual_clearance_samples_cm":actual_clearance_values,
+        "actual_wall_clearance_samples_cm":actual_wall_clearances,
+        "actual_obstacle_clearance_samples_cm":actual_obstacle_clearances,
+        "lap_times_s":lap_times,
+        "total_time_s":round(step*FIXED_RULES.simulation_dt_s,4),
         "elapsed_simulation_s":round(step*FIXED_RULES.simulation_dt_s,4),
         "min_wall_clearance_cm":min(wall_values,default=None),"min_obstacle_clearance_cm":min(obstacle_values,default=None),
         "failure_location":failure_location,
@@ -336,6 +560,7 @@ def run_scenario(seed:int,scenario_index:int,sensor:SensorModel,duration_s:float
             last_diagnostics.no_safe_detail
             if termination_reason == "NO_SAFE_TRAJECTORY" and last_diagnostics else None
         ),
+        "completed_laps":min(progress // STRAIGHTS_PER_LAP, TARGET_LAPS),
         "cycles":rows}
     return summary,rows
 
@@ -350,20 +575,29 @@ def write_outputs(summaries,rows,output_dir:Path,run_config:dict[str,Any])->None
         for obstacle in s["objects"]:
             straight, slot=seat_slot((obstacle["x_cm"],obstacle["y_cm"]))
             obstacle_id=obstacle["object_id"]
-            passed=obstacle_id in s["passed_object_ids"]
+            events=[event for event in s.get("crossing_events", []) if event["obstacle_id"] == obstacle_id]
+            passed=bool(events)
             obstacle_rows.append({
                 "id":int(obstacle_id),"straight":straight_numbers[straight],"slot":slot,
                 "color":obstacle["color"].upper(),
                 "ever_detected":s["observations"][obstacle_id]["ever_detected"],
                 "crossed":obstacle_id in s["crossed_object_ids"],
                 "passed":passed,
-                "pass_side_correct":s["correct_pass_side"] if passed else None,
+                "pass_count":len(events),
+                "correct_pass_count":sum(event["correct"] for event in events),
+                "incorrect_pass_count":sum(not event["correct"] for event in events),
+                "pass_side_correct":all(event["correct"] for event in events) if passed else None,
+                "undetected_pass_count":sum(not event["detected"] for event in events),
             })
         planner_data=s["planner_diagnostics"] or {}
         result={
             "completed":s["completed"],"termination_reason":s["termination_reason"].upper(),
             "laps_completed":s["laps_completed"],"straights_completed":s["straights_completed"],
             "distance_cm":s["distance_cm"],"elapsed_simulation_s":s["elapsed_simulation_s"],
+            "distance_traveled_cm":s["distance_traveled_cm"],
+            "strict_success":s["strict_success"],
+            "navigation_success":s["navigation_success"],
+            "lap_times_s":s["lap_times_s"],
             "no_safe_reason":s["no_safe_reason"],
             "no_safe_detail":s["no_safe_detail"],
         }
@@ -395,12 +629,15 @@ def write_outputs(summaries,rows,output_dir:Path,run_config:dict[str,Any])->None
             "clearance":{
                 "min_clearance_cm":s["min_clearance_cm"],"min_wall_clearance_cm":s["min_wall_clearance_cm"],
                 "min_obstacle_clearance_cm":s["min_obstacle_clearance_cm"],
+                "stats":s["clearance_stats"],
                 "desired_clearance_cm":s["desired_clearance_cm"],
                 "required_clearance_cm":s["required_clearance_cm"],
+                "safety_margin_violations":s["safety_margin_violations"],
                 "safety_margins_disabled":s["safety_margins_disabled"],
             },
             "perception":{
                 "object_not_detected":s["object_not_detected"],
+                "object_not_detected_count":s["object_not_detected_count"],
                 "visible_obstacles_at_failure":last_cycle.get("visible_obstacles",0),
                 "expected_relevant_obstacles":last_cycle.get("expected_relevant_obstacles",len(s["objects"])),
                 "nearest_obstacle_id":s["nearest_obstacle_id"],
@@ -411,8 +648,13 @@ def write_outputs(summaries,rows,output_dir:Path,run_config:dict[str,Any])->None
             },
             "obstacles":obstacle_rows,
             "rules":{
-                "rule_broken":s["rule_broken"],"wrong_pass_side_count":0 if s["correct_pass_side"] else 1,
-                "obstacles_passed_correctly":sum(item["passed"] and item["pass_side_correct"] is True for item in obstacle_rows),
+                "rule_broken":s["rule_broken"],"wrong_pass_side_count":s["obstacles_passed_incorrectly"],
+                "obstacles_passed_correctly":s["obstacles_passed_correctly"],
+                "obstacles_passed_incorrectly":s["obstacles_passed_incorrectly"],
+                "red_passed_left":s["red_passed_left"],
+                "green_passed_right":s["green_passed_right"],
+                "other_incorrect_passes":s["other_incorrect_passes"],
+                "rule_violations_per_scenario":s["rule_violations_per_scenario"],
             },
             "planner":{
                 "planning_budget_mode":s["planning_budget_mode"],
@@ -420,8 +662,15 @@ def write_outputs(summaries,rows,output_dir:Path,run_config:dict[str,Any])->None
                 "candidates_valid":planner_data.get("forward_candidates_valid",0)+planner_data.get("reverse_candidates_valid",0),
                 "forward_candidates_generated":planner_data.get("forward_candidates_generated",0),
                 "forward_candidates_valid":planner_data.get("forward_candidates_valid",0),
+                "forward_physical_safe_count":planner_data.get("forward_physical_safe_count",0),
+                "forward_correct_side_count":planner_data.get("forward_correct_side_count",0),
+                "forward_wrong_side_count":planner_data.get("forward_wrong_side_count",0),
                 "reverse_candidates_generated":planner_data.get("reverse_candidates_generated",0),
                 "reverse_candidates_valid":planner_data.get("reverse_candidates_valid",0),
+                "reverse_trigger_reason":planner_data.get("reverse_trigger_reason"),
+                "replannings":s["replannings"],
+                "total_candidates_evaluated":s["total_candidates_evaluated"],
+                "no_safe_replanning_percentage":s["no_safe_replanning_percentage"],
                 "rejection_reasons":planner_data.get("rejection_reasons",{}),
                 "forward_rejections":planner_data.get("forward_rejections",{}),
                 "reverse_rejections":planner_data.get("reverse_rejections",{}),
@@ -438,6 +687,12 @@ def write_outputs(summaries,rows,output_dir:Path,run_config:dict[str,Any])->None
                 "reverse_available":True,"reverse_attempted":s["reverse_recovery_attempted"],
                 "reverse_distance_cm":s["reverse_distance_cm"],
                 "replan_after_reverse":s["replan_after_reverse"],"recovery_success":s["recovery_success"],
+                "reverse_count":s["reverse_count"],
+                "reverse_distance_traveled_cm":s["reverse_distance_traveled_cm"],
+            },
+            "steering":{
+                "changes_mean_deg":s["steering_changes_mean_deg"],
+                "changes_max_deg":s["steering_changes_max_deg"],
             },
         })
     def values(key:str)->list[float]:
@@ -467,6 +722,123 @@ def write_outputs(summaries,rows,output_dir:Path,run_config:dict[str,Any])->None
         "planning_budget_mode":summaries[0].get("planning_budget_mode") if summaries else None,
         "safety_margins_disabled":bool(summaries and summaries[0].get("safety_margins_disabled")),
     }
+    all_clearances = [
+        float(value)
+        for scenario in summaries
+        for value in scenario.get("actual_clearance_samples_cm", [])
+    ]
+    all_wall_clearances = [
+        float(value)
+        for scenario in summaries
+        for value in scenario.get("actual_wall_clearance_samples_cm", [])
+    ]
+    all_obstacle_clearances = [
+        float(value)
+        for scenario in summaries
+        for value in scenario.get("actual_obstacle_clearance_samples_cm", [])
+    ]
+    all_steering_changes = [
+        float(value)
+        for scenario in summaries
+        for value in scenario.get("steering_change_samples_deg", [])
+    ]
+    all_lap_times = [
+        float(value)
+        for scenario in summaries
+        for value in scenario.get("lap_times_s", [])
+    ]
+    total_replannings = sum(int(s["replannings"]) for s in summaries)
+    no_safe_replannings = sum(
+        sum(bool(row["no_safe_trajectory"]) for row in s["cycles"])
+        for s in summaries
+    )
+    total_encounters = sum(int(s["total_obstacles_encountered"]) for s in summaries)
+    total_correct_passes = sum(int(s["obstacles_passed_correctly"]) for s in summaries)
+    total_incorrect_passes = sum(int(s["obstacles_passed_incorrectly"]) for s in summaries)
+    scenarios_with_rule_violations = sum(
+        bool(s["rule_violations_per_scenario"]) for s in summaries
+    )
+    scenario_count = len(summaries)
+    summary.update({
+        "strict_success_rate": round(
+            100.0 * sum(bool(s["strict_success"]) for s in summaries) / max(1, scenario_count), 2,
+        ),
+        "navigation_success_rate": round(
+            100.0 * sum(bool(s["navigation_success"]) for s in summaries) / max(1, scenario_count), 2,
+        ),
+        "collision_rate": round(
+            100.0 * sum(bool(s["collision"]) for s in summaries) / max(1, scenario_count), 2,
+        ),
+        "wall_collision_rate": round(
+            100.0 * sum(bool(s["wall_collision"]) for s in summaries) / max(1, scenario_count), 2,
+        ),
+        "obstacle_collision_rate": round(
+            100.0 * sum(bool(s["obstacle_collision"]) for s in summaries) / max(1, scenario_count), 2,
+        ),
+        "object_not_detected_rate": round(
+            100.0 * sum(bool(s["object_not_detected_count"]) for s in summaries) / max(1, scenario_count), 2,
+        ),
+        "object_not_detected_events": sum(int(s["object_not_detected_count"]) for s in summaries),
+        "object_not_detected_event_rate": round(
+            100.0 * sum(int(s["object_not_detected_count"]) for s in summaries)
+            / max(1, total_encounters), 2,
+        ),
+        "no_safe_trajectory_rate": round(
+            100.0 * sum(s["no_safe_trajectory_cycles"] > 0 for s in summaries)
+            / max(1, scenario_count), 2,
+        ),
+        "total_obstacles_encountered": total_encounters,
+        "obstacles_passed_correctly": total_correct_passes,
+        "obstacles_passed_incorrectly": total_incorrect_passes,
+        "obstacle_rule_compliance_rate": round(
+            100.0 * total_correct_passes / max(1, total_encounters), 2,
+        ),
+        "scenarios_with_rule_violations": scenarios_with_rule_violations,
+        "rule_violations_per_scenario": [
+            {"scenario_index": s["scenario_index"], "count": s["rule_violations_per_scenario"]}
+            for s in summaries
+        ],
+        "wrong_pass_breakdown": {
+            "red_passed_left": sum(int(s["red_passed_left"]) for s in summaries),
+            "green_passed_right": sum(int(s["green_passed_right"]) for s in summaries),
+            "other_incorrect_passes": sum(int(s["other_incorrect_passes"]) for s in summaries),
+        },
+        "clearance_statistics": {
+            "global": _clearance_stats(all_clearances),
+            "walls": _clearance_stats(all_wall_clearances),
+            "obstacles": _clearance_stats(all_obstacle_clearances),
+        },
+        "safety_margin_violations": sum(int(s["safety_margin_violations"]) for s in summaries),
+        "distance_traveled_cm": round(sum(float(s["distance_traveled_cm"]) for s in summaries), 4),
+        "replannings": total_replannings,
+        "total_candidates_evaluated": sum(int(s["total_candidates_evaluated"]) for s in summaries),
+        "no_safe_replannings": no_safe_replannings,
+        "no_safe_replanning_percentage": round(
+            100.0 * no_safe_replannings / max(1, total_replannings), 2,
+        ),
+        "reverse_count": sum(int(s["reverse_count"]) for s in summaries),
+        "reverse_distance_traveled_cm": round(
+            sum(float(s["reverse_distance_traveled_cm"]) for s in summaries), 4,
+        ),
+        "steering_changes_mean_deg": (
+            sum(all_steering_changes) / len(all_steering_changes)
+            if all_steering_changes else 0.0
+        ),
+        "steering_changes_max_deg": max(all_steering_changes, default=0.0),
+        "lap_times_s": {
+            "all": all_lap_times,
+            "mean": sum(all_lap_times) / len(all_lap_times) if all_lap_times else None,
+            "max": max(all_lap_times, default=None),
+        },
+        "total_simulation_time_s": round(
+            sum(float(s["total_time_s"]) for s in summaries), 4,
+        ),
+    })
+    summary["min_clearance_cm"].update({
+        "p5": _clearance_stats(all_clearances)["p5"],
+        "p10": _clearance_stats(all_clearances)["p10"],
+        "median": _clearance_stats(all_clearances)["median"],
+    })
     (output_dir/"config.json").write_text(
         json.dumps(jsonable(run_config),indent=2,ensure_ascii=False)+"\n",encoding="utf-8"
     )

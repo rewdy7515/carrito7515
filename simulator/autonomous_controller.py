@@ -6,13 +6,13 @@ from dataclasses import replace
 
 try:
     from geometric_planner import (
-        CandidateTrajectory, GeometricPlanner, MotionPrimitive, PlannerInput,
+        CandidateTrajectory, GeometricPlanner, MotionPrimitive, ObstaclePassState, PlannerInput,
         PlannerResult, PlannerState, PrimitiveType, VehicleState,
         VisibleObstacle,
     )
 except ImportError:
     from simulator.geometric_planner import (
-        CandidateTrajectory, GeometricPlanner, MotionPrimitive, PlannerInput,
+        CandidateTrajectory, GeometricPlanner, MotionPrimitive, ObstaclePassState, PlannerInput,
         PlannerResult, PlannerState, PrimitiveType, VehicleState,
         VisibleObstacle,
     )
@@ -40,12 +40,14 @@ class AutonomousController:
         self._last_result: PlannerResult | None = None
         self._tracked_obstacles: dict[str, VisibleObstacle] = {}
         self._tracked_seen_at: dict[str, float] = {}
+        self._obstacle_states: dict[str, ObstaclePassState] = {}
         self._last_switch_reason: str | None = None
 
     def reset(self) -> None:
         self.active_target_id = None
         self._tracked_obstacles.clear()
         self._tracked_seen_at.clear()
+        self._obstacle_states.clear()
         self._last_switch_reason = None
         self._last_result = None
         self._clear_commitment()
@@ -60,9 +62,15 @@ class AutonomousController:
 
     def _remember_obstacles(self, planner_input: PlannerInput) -> PlannerInput:
         """Conserva las detecciones para no perder el orden de prioridad."""
-        self._tracked_obstacles.update(
-            {item.object_id: item for item in planner_input.visible_obstacles}
-        )
+        for item in planner_input.visible_obstacles:
+            state = self._obstacle_states.get(item.object_id, item.pass_state)
+            terminal = state in {
+                ObstaclePassState.PASSED_CORRECT,
+                ObstaclePassState.PASSED_WRONG,
+            }
+            self._tracked_obstacles[item.object_id] = replace(
+                item, pass_state=state, already_passed=item.already_passed or terminal,
+            )
         for item in planner_input.visible_obstacles:
             self._tracked_seen_at[item.object_id] = planner_input.timestamp_s
         timeout = self.planner.tuning.memory_timeout_s
@@ -88,13 +96,45 @@ class AutonomousController:
              if obstacle.object_id == self.active_target_id),
             None,
         )
-        if target is not None and (
-            target.already_passed
-            or self.planner.obstacle_passed_now(data, target)
-        ):
+        if target is not None and target.already_passed:
+            self._obstacle_states[target.object_id] = target.pass_state
+            terminal = replace(
+                target, already_passed=True, pass_state=target.pass_state,
+            )
             self.active_target_id = None
             self._clear_commitment()
+            return self._replace_obstacle(data, terminal)
+        elif target is not None and self.planner.obstacle_passed_now(data, target):
+            side = self.planner.obstacle_pass_side_now(data, target)
+            required = "RIGHT" if target.color.lower() == "red" else "LEFT"
+            state = (
+                ObstaclePassState.PASSED_CORRECT
+                if side.value == required else ObstaclePassState.PASSED_WRONG
+            )
+            self._obstacle_states[target.object_id] = state
+            self._tracked_obstacles[target.object_id] = replace(
+                target, already_passed=True, pass_state=state,
+            )
+            self.active_target_id = None
+            self._clear_commitment()
+            return self._replace_obstacle(
+                data, self._tracked_obstacles[target.object_id],
+            )
         return data
+
+    def _replace_obstacle(
+        self, data: PlannerInput, replacement: VisibleObstacle,
+    ) -> PlannerInput:
+        """Publica el estado terminal en visible y tracked en este ciclo."""
+        visible = tuple(
+            replacement if item.object_id == replacement.object_id else item
+            for item in data.visible_obstacles
+        )
+        tracked = tuple(
+            replacement if item.object_id == replacement.object_id else item
+            for item in data.tracked_obstacles
+        )
+        return replace(data, visible_obstacles=visible, tracked_obstacles=tracked)
 
     def _advance_commitment(self, state: VehicleState) -> None:
         if self._last_position is None:
@@ -273,8 +313,18 @@ class AutonomousController:
         result = self.planner.plan(data)
         if self.active_target_id is None and result.diagnostics.target_obstacle_id:
             self.active_target_id = result.diagnostics.target_obstacle_id
+            self._obstacle_states.setdefault(
+                self.active_target_id, ObstaclePassState.APPROACHING,
+            )
         result.diagnostics.active_target_id = self.active_target_id
         new = result.best_candidate if result.best_candidate and result.best_candidate.safe else None
+        if self.active_target_id is not None and new is not None:
+            state = new.pass_state
+            if state in {
+                ObstaclePassState.APPROACHING,
+                ObstaclePassState.PASSING,
+            }:
+                self._obstacle_states[self.active_target_id] = state
         switched = self._should_switch(current, new)
 
         if current is None or switched:

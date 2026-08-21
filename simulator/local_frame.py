@@ -52,7 +52,7 @@ def footprint_side(
     forward_vector: Point,
     tolerance: float = 1e-9,
 ) -> LocalSide:
-    """Clasifica el lado solo cuando el footprint completo ya está separado."""
+    """Clasifica un footprint que ya quedó completamente separado."""
     rx, ry = right_vector(forward_vector)
     vehicle_lateral = [point[0] * rx + point[1] * ry for point in vehicle_polygon]
     obstacle_lateral = [point[0] * rx + point[1] * ry for point in obstacle_polygon]
@@ -61,3 +61,23 @@ def footprint_side(
     if max(vehicle_lateral) < min(obstacle_lateral) - tolerance:
         return LocalSide.LEFT
     return LocalSide.CENTER
+
+
+def crossing_side(
+    vehicle_polygon: Sequence[Point],
+    obstacle_polygon: Sequence[Point],
+    forward_vector: Point,
+) -> LocalSide:
+    """Devuelve siempre LEFT o RIGHT usando el footprint completo.
+
+    ``CENTER`` no es un resultado válido de un cruce. Si las proyecciones
+    laterales todavía se solapan, se escoge el lado con mayor separación
+    relativa entre los dos footprints. La decisión sigue usando todos los
+    vértices, nunca únicamente el centro del vehículo.
+    """
+    rx, ry = right_vector(forward_vector)
+    vehicle_lateral = [point[0] * rx + point[1] * ry for point in vehicle_polygon]
+    obstacle_lateral = [point[0] * rx + point[1] * ry for point in obstacle_polygon]
+    right_gap = min(vehicle_lateral) - max(obstacle_lateral)
+    left_gap = min(obstacle_lateral) - max(vehicle_lateral)
+    return LocalSide.RIGHT if right_gap >= left_gap else LocalSide.LEFT

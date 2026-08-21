@@ -51,12 +51,12 @@ try:
     from planner_rules import FIXED_RULES
     from planner_tuning import PlannerTuning, PreferredSafetyMargins, load_planner_tuning
     from scenario import Scenario, default_scenario, generate_scenario
-    from local_frame import LocalSide, footprint_side, get_local_side
+    from local_frame import LocalSide, crossing_side, get_local_side
 except ImportError:
     from simulator.planner_rules import FIXED_RULES
     from simulator.planner_tuning import PlannerTuning, PreferredSafetyMargins, load_planner_tuning
     from simulator.scenario import Scenario, default_scenario, generate_scenario
-    from simulator.local_frame import LocalSide, footprint_side, get_local_side
+    from simulator.local_frame import LocalSide, crossing_side, get_local_side
 
 try:
     from track_config import (
@@ -365,13 +365,14 @@ def update_passed_obstacles(
             continue
         # El carro solo cuenta como pasado cuando todo su footprint ya quedó
         # a un lado del obstáculo. Cruzar longitudinalmente por el centro no
-        # es un PASSED válido y no debe generar una falsa superación.
-        final_footprint_side = footprint_side(body, obstacle_polygon, forward)
-        if final_footprint_side is LocalSide.CENTER:
-            continue
-        actual_side = obstacle.closest_approach_side or final_footprint_side
-        if actual_side is LocalSide.CENTER:
-            actual_side = final_footprint_side
+        # cumple la regla lateral, pero sí es un cruce longitudinal real:
+        # se marca como PASSED e incorrecto una sola vez.
+        final_footprint_side = crossing_side(body, obstacle_polygon, forward)
+        # La regla se evalúa en el instante en que el footprint completo ya
+        # rebasó el obstáculo. El closest approach solo sirve como diagnóstico:
+        # puede ocurrir antes de que la carrocería termine de cruzar y no
+        # representa necesariamente el lado final de paso.
+        actual_side = final_footprint_side
         expected_side = "right" if obstacle.color.lower() == "red" else "left"
         obstacle.pass_side_correct = (
             actual_side.value == expected_side.upper()
@@ -482,8 +483,17 @@ def movement_record(
                 "initial_lateral_error_cm": round(candidate.initial_lateral_error_cm, 3),
                 "final_lateral_error_cm": round(candidate.final_lateral_error_cm, 3),
                 "pass_progress_cm": round(candidate.pass_progress_cm, 3),
+                "best_pass_progress_cm": round(candidate.best_pass_progress_cm, 3),
+                "terminal_pass_progress_cm": round(candidate.terminal_pass_progress_cm, 3),
+                "signed_pass_progress_cm": round(candidate.signed_pass_progress_cm, 3),
+                "pass_progress_ratio": round(candidate.pass_progress_ratio, 4),
                 "score_components": dict(candidate.score_components),
                 "score_clearance": candidate.score_components.get("clearance", 0.0),
+                "score_wall_clearance": candidate.score_components.get("wall_clearance", 0.0),
+                "score_obstacle_clearance": candidate.score_components.get("obstacle_clearance", 0.0),
+                "min_wall_clearance": candidate.score_components.get("min_wall_clearance"),
+                "min_obstacle_clearance": candidate.score_components.get("min_obstacle_clearance"),
+                "safety_margin_violation": candidate.score_components.get("safety_margin_violation", 0.0),
                 "score_progress": candidate.score_components.get("progress", 0.0),
                 "score_heading": candidate.score_components.get("heading", 0.0),
                 "score_steering": candidate.score_components.get("steering", 0.0),
@@ -491,6 +501,8 @@ def movement_record(
                 "score_length": candidate.score_components.get("length", 0.0),
                 "score_pass_progress": candidate.score_components.get("pass_progress", 0.0),
                 "score_wrong_pass_side": candidate.score_components.get("wrong_pass_side", 0.0),
+                "score_wrong_pass_side_base": candidate.score_components.get("wrong_pass_side_base", 0.0),
+                "score_wrong_pass_side_priority_adjustment": candidate.score_components.get("wrong_pass_side_priority_adjustment", 0.0),
                 "score_reverse": candidate.score_components.get("reverse", 0.0),
                 "pass_side_adjustment": candidate.pass_side_adjustment,
                 "beam_pruned": candidate.beam_pruned,
@@ -530,6 +542,9 @@ def movement_record(
             "candidates_evaluated":diagnostics.candidates_evaluated if diagnostics else 0,
             "forward_candidates_generated":diagnostics.forward_candidates_generated if diagnostics else 0,
             "forward_candidates_valid":diagnostics.forward_candidates_valid if diagnostics else 0,
+            "forward_physical_safe_count":diagnostics.forward_physical_safe_count if diagnostics else 0,
+            "forward_correct_side_count":diagnostics.forward_correct_side_count if diagnostics else 0,
+            "forward_wrong_side_count":diagnostics.forward_wrong_side_count if diagnostics else 0,
             "reverse_candidates_generated":diagnostics.reverse_candidates_generated if diagnostics else 0,
             "reverse_candidates_valid":diagnostics.reverse_candidates_valid if diagnostics else 0,
             "rejection_reasons":diagnostics.rejection_reasons if diagnostics else {},
@@ -547,6 +562,7 @@ def movement_record(
             "new_future_pass_viable":diagnostics.new_future_pass_viable if diagnostics else None,
             "switch_reason":diagnostics.switch_reason if diagnostics else None,
             "reverse_recovery_attempted":diagnostics.reverse_recovery_attempted if diagnostics else False,
+            "reverse_trigger_reason":diagnostics.reverse_trigger_reason if diagnostics else None,
             "reverse_distance_cm":diagnostics.reverse_distance_cm if diagnostics else 0.0,
             "reverse_steering_deg":diagnostics.reverse_steering_deg if diagnostics else 0.0,
             "forward_after_reverse_candidate_id":diagnostics.forward_after_reverse_candidate_id if diagnostics else None,

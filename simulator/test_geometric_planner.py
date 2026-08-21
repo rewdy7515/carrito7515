@@ -29,6 +29,12 @@ except ImportError:
     from simulator.planner_tuning import PlannerTuning
 
 
+try:
+    from trajectory_scorer import TrajectoryScoreWeights, score_trajectory_breakdown
+except ImportError:
+    from simulator.trajectory_scorer import TrajectoryScoreWeights, score_trajectory_breakdown
+
+
 BOUNDARY = rectangle_polygon((0.0, 0.0, 300.0, 300.0))
 
 
@@ -178,7 +184,10 @@ class GeometricPlannerTests(unittest.TestCase):
             planning_budget_mode="candidate_count",
             diagnostic_level="summary",
         ))
-        obstacle = VisibleObstacle("near", 75.0, 70.0, 5.0, 5.0, "red")
+        # La recuperación debe probarse en un caso donde el lado obligatorio
+        # todavía sea geométricamente alcanzable. Con y=70 cm, el margen duro
+        # y el footprint completo hacen que el pase por RIGHT sea imposible.
+        obstacle = VisibleObstacle("near", 75.0, 45.0, 5.0, 5.0, "red")
         result = planner.plan(PlannerInput(
             VehicleState(50.0, 50.0, 0.0), (obstacle,), (), BOUNDARY,
             TrackDirection.CLOCKWISE, 0.0,
@@ -233,6 +242,16 @@ class GeometricPlannerTests(unittest.TestCase):
             VehicleState(50.0, 150.0, -math.pi / 2), (obstacle,), (), BOUNDARY,
             TrackDirection.CLOCKWISE, -math.pi / 2, 0.0,
             ((50.0, 150.0), (50.0, 50.0), (250.0, 50.0)),
+        )
+        self.assertAlmostEqual(planner._target_tangent(data, obstacle), 0.0)
+
+    def test_target_tangent_is_oriented_with_vehicle_travel_direction(self):
+        planner = GeometricPlanner()
+        obstacle = VisibleObstacle("top", 150.0, 50.0, 5.0, 5.0, "green")
+        data = PlannerInput(
+            VehicleState(50.0, 50.0, 0.0), (obstacle,), (), BOUNDARY,
+            TrackDirection.CLOCKWISE, 0.0, 0.0,
+            ((200.0, 50.0), (50.0, 50.0)),
         )
         self.assertAlmostEqual(planner._target_tangent(data, obstacle), 0.0)
 
@@ -494,6 +513,30 @@ class GeometricPlannerTests(unittest.TestCase):
         self.assertTrue(planner._correct_side(completed_at(20.0), green_data))
         self.assertFalse(planner._correct_side(completed_at(80.0), green_data))
 
+    def test_wrong_side_is_hard_rejection_after_full_pass(self):
+        planner = GeometricPlanner()
+        initial = VehicleState(50.0, 50.0, 0.0)
+        obstacle = VisibleObstacle("green", 75.0, 50.0, 5.0, 5.0, "green")
+        data = PlannerInput(
+            initial, (obstacle,), (), BOUNDARY, TrackDirection.CLOCKWISE,
+            0.0, 0.0, ((50.0, 50.0), (150.0, 50.0)),
+        )
+        candidate = CandidateTrajectory(
+            "wrong-green", None,
+            (MotionPrimitive(PrimitiveType.STRAIGHT, 10.0, 0.0, 18.0),),
+            target_obstacle_id="green",
+        )
+        state = VehicleState(120.0, 80.0, 0.0)
+        candidate.trajectory_points = [TrajectoryPoint(
+            state, 0, 70.0, planner.geometry.footprint(state),
+        )]
+        planner.validate(candidate, data)
+        self.assertTrue(candidate.physical_safe)
+        self.assertFalse(candidate.safe)
+        self.assertTrue(candidate.wrong_pass_side)
+        self.assertEqual(candidate.rejection_reason, "wrong_pass_side")
+        self.assertEqual(candidate.diagnostic_rejection_reason, "WRONG_PASS_SIDE")
+
     def test_geometrically_correct_straight_is_not_cancelled_by_heuristics(self):
         planner = GeometricPlanner()
         obstacle = VisibleObstacle("red", 100.0, 50.0, 5.0, 5.0, "red")
@@ -699,6 +742,90 @@ class GeometricPlannerTests(unittest.TestCase):
         )
         planner._apply_pass_side_priority([correct, wrong])
         self.assertGreater(correct.score, wrong.score)
+
+    def test_wrong_side_does_not_trigger_reverse_if_forward_is_physical_safe(self):
+        planner = GeometricPlanner(tuning=PlannerTuning(
+            planning_budget_mode="candidate_count",
+            diagnostic_level="summary",
+        ))
+        obstacle = VisibleObstacle("green", 100.0, 50.0, 5.0, 5.0, "green")
+        result = planner.plan(PlannerInput(
+            VehicleState(50.0, 50.0, 0.0), (obstacle,), (), BOUNDARY,
+            TrackDirection.CLOCKWISE, 0.0, 0.0,
+            ((50.0, 50.0), (200.0, 50.0)),
+        ))
+        self.assertGreater(result.diagnostics.forward_physical_safe_count, 0)
+        self.assertFalse(result.diagnostics.reverse_recovery_attempted)
+        self.assertIsNotNone(result.best_candidate)
+        self.assertFalse(planner._is_reverse_candidate(result.best_candidate))
+
+    def test_diagnostic_level_does_not_change_selection(self):
+        obstacle = VisibleObstacle("green", 126.0, 50.0, 5.0, 5.0, "green")
+        data = PlannerInput(
+            VehicleState(50.0, 50.0, 0.0), (obstacle,), (), BOUNDARY,
+            TrackDirection.CLOCKWISE, 0.0, 0.0,
+            ((50.0, 50.0), (220.0, 50.0)),
+        )
+        selections = []
+        for level in ("full", "summary", "off"):
+            planner = GeometricPlanner(tuning=PlannerTuning(
+                planning_budget_mode="candidate_count",
+                diagnostic_level=level,
+            ))
+            result = planner.plan(data)
+            selections.append((
+                result.best_candidate.candidate_id if result.best_candidate else None,
+                result.best_candidate.score if result.best_candidate else None,
+                result.diagnostics.reverse_recovery_attempted,
+            ))
+        self.assertEqual(selections[0], selections[1])
+        self.assertEqual(selections[1], selections[2])
+
+    def test_clearance_score_saturates_at_target_and_penalizes_deficit(self):
+        weights = TrajectoryScoreWeights(
+            clearance_reward=10.0,
+            wall_clearance_weight=1.0,
+            obstacle_clearance_weight=1.0,
+            clearance_violation_penalty=20.0,
+        )
+
+        def score(wall: float, obstacle: float):
+            return score_trajectory_breakdown(
+                minimum_clearance_cm=min(wall, obstacle),
+                preferred_clearance_cm=15.0,
+                minimum_wall_clearance_cm=wall,
+                minimum_obstacle_clearance_cm=obstacle,
+                wall_hard_clearance_cm=3.0,
+                obstacle_hard_clearance_cm=3.0,
+                wall_target_clearance_cm=15.0,
+                obstacle_target_clearance_cm=15.0,
+                progress_cm=0.0, final_heading_error_deg=0.0,
+                steering_effort=0.0, steering_changes=0.0,
+                length_cm=10.0, reverse_distance_cm=0.0,
+                physical_collision=False, weights=weights,
+            )
+
+        below = score(2.0, 15.0)
+        target = score(15.0, 15.0)
+        beyond = score(40.0, 40.0)
+        self.assertLess(below.score_wall_clearance, 0.0)
+        self.assertGreater(below.safety_margin_violation, 0.0)
+        self.assertEqual(target.score_wall_clearance, beyond.score_wall_clearance)
+        self.assertEqual(target.score_obstacle_clearance, beyond.score_obstacle_clearance)
+
+    def test_runner_exposes_objective_metric_shape(self):
+        summary, _ = run_scenario(
+            seed=20260815, scenario_index=0, sensor=SensorModel(),
+            duration_s=0.2, mode="2",
+        )
+        for key in (
+            "total_obstacles_encountered", "obstacles_passed_correctly",
+            "obstacles_passed_incorrectly", "obstacle_rule_compliance_rate",
+            "object_not_detected_count", "red_passed_left", "green_passed_right",
+            "clearance_stats", "safety_margin_violations", "replannings",
+            "total_candidates_evaluated", "reverse_count",
+        ):
+            self.assertIn(key, summary)
 
     def test_prediction_segments_are_tunable_without_hardcoded_three(self):
         for segments in (2, 3, 4):

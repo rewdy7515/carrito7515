@@ -18,6 +18,7 @@
     "switch_margin": "Mejora mínima de score necesaria para abandonar el plan comprometido.",
     "memory_timeout_s": "Tiempo de memoria de obstáculos no activos temporalmente perdidos.",
     "preferred_safety_margins": "Clearance preferido usado únicamente por trajectory_scorer.py.",
+    "target_safety_clearance": "Clearance objetivo soft; la recompensa se satura al alcanzar wall_cm/obstacle_cm.",
     "planning_budget_mode": "Presupuesto: time usa max_planning_time_ms; candidate_count usa max_candidates.",
     "max_candidates": "Límite de candidatos completos evaluados por ciclo.",
     "max_planning_time_ms": "Límite de tiempo real por ciclo cuando planning_budget_mode=time.",
@@ -46,6 +47,10 @@
     "side_cm": 5.0,
     "rear_cm": 5.0
   },
+  "target_safety_clearance": {
+    "wall_cm": 7.0,
+    "obstacle_cm": 10.0
+  },
   "planning_budget_mode": "time",
   "max_candidates": 256,
   "max_planning_time_ms": 20.0,
@@ -58,6 +63,9 @@
     "steering_changes_penalty": 0.3,
     "length_penalty": 0.05,
     "reverse_distance_penalty": 2.0,
-    "collision_penalty": 1000000.0
+    "collision_penalty": 1000000.0,
+    "wall_clearance_weight": 0.5,
+    "obstacle_clearance_weight": 0.5,
+    "clearance_violation_penalty": 25.0
   }
 }
