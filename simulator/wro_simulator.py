@@ -459,7 +459,11 @@ def movement_record(
                     }
                     for primitive in candidate.primitives
                 ],
+                "physical_safe": candidate.physical_safe,
                 "safe": candidate.safe,
+                "horizon_cm": round(candidate.horizon_cm, 3),
+                "raw_score": candidate.raw_score if math.isfinite(candidate.raw_score) else None,
+                "final_score": candidate.final_score if math.isfinite(candidate.final_score) else None,
                 "score": candidate.score if math.isfinite(candidate.score) else None,
                 "rejection_reason": candidate.diagnostic_rejection_reason,
                 "collision_type": candidate.collision_type,
@@ -469,6 +473,28 @@ def movement_record(
                     candidate.desired_pass_side.value
                     if candidate.desired_pass_side else None
                 ),
+                "actual_pass_side": candidate.actual_pass_side.value if candidate.actual_pass_side else None,
+                "current_pass_side_satisfied": candidate.current_pass_side_satisfied,
+                "future_pass_viable": candidate.future_pass_viable,
+                "target_passed": candidate.target_passed,
+                "target_passed_correctly": candidate.target_passed_correctly,
+                "wrong_pass_side": candidate.wrong_pass_side,
+                "initial_lateral_error_cm": round(candidate.initial_lateral_error_cm, 3),
+                "final_lateral_error_cm": round(candidate.final_lateral_error_cm, 3),
+                "pass_progress_cm": round(candidate.pass_progress_cm, 3),
+                "score_components": dict(candidate.score_components),
+                "score_clearance": candidate.score_components.get("clearance", 0.0),
+                "score_progress": candidate.score_components.get("progress", 0.0),
+                "score_heading": candidate.score_components.get("heading", 0.0),
+                "score_steering": candidate.score_components.get("steering", 0.0),
+                "score_steering_changes": candidate.score_components.get("steering_changes", 0.0),
+                "score_length": candidate.score_components.get("length", 0.0),
+                "score_pass_progress": candidate.score_components.get("pass_progress", 0.0),
+                "score_wrong_pass_side": candidate.score_components.get("wrong_pass_side", 0.0),
+                "score_reverse": candidate.score_components.get("reverse", 0.0),
+                "pass_side_adjustment": candidate.pass_side_adjustment,
+                "beam_pruned": candidate.beam_pruned,
+                "beam_pruned_reason": candidate.beam_pruned_reason,
                 "minimum_clearance_cm": round(candidate.minimum_clearance_cm, 3)
                 if math.isfinite(candidate.minimum_clearance_cm) else None,
                 "minimum_obstacle_clearance_cm": round(candidate.minimum_obstacle_clearance_cm, 3)
@@ -515,6 +541,17 @@ def movement_record(
             "new_plan_score":diagnostics.new_plan_score if diagnostics else None,
             "switch_margin":diagnostics.switch_margin if diagnostics else None,
             "switched_plan":diagnostics.switched_plan if diagnostics else False,
+            "committed_horizon_cm":diagnostics.committed_horizon_cm if diagnostics else 0.0,
+            "new_horizon_cm":diagnostics.new_horizon_cm if diagnostics else 0.0,
+            "committed_future_pass_viable":diagnostics.committed_future_pass_viable if diagnostics else None,
+            "new_future_pass_viable":diagnostics.new_future_pass_viable if diagnostics else None,
+            "switch_reason":diagnostics.switch_reason if diagnostics else None,
+            "reverse_recovery_attempted":diagnostics.reverse_recovery_attempted if diagnostics else False,
+            "reverse_distance_cm":diagnostics.reverse_distance_cm if diagnostics else 0.0,
+            "reverse_steering_deg":diagnostics.reverse_steering_deg if diagnostics else 0.0,
+            "forward_after_reverse_candidate_id":diagnostics.forward_after_reverse_candidate_id if diagnostics else None,
+            "recovery_min_clearance_cm":diagnostics.recovery_min_clearance_cm if diagnostics else None,
+            "recovery_final_score":diagnostics.recovery_final_score if diagnostics else None,
             "calculation_time_ms":diagnostics.calculation_time_ms if diagnostics else 0.0,
             "candidate_summaries":candidate_summaries},
         "obstacles_cm":[{"id":i,"x":round(o.x,3),"y":round(o.y,3),"color":o.color,"passed":o.passed}
@@ -627,7 +664,11 @@ def save_manual_recording(
         "decision_reason", "candidates_evaluated", "forward_candidates_valid",
         "reverse_candidates_valid", "rejection_reasons_json", "candidate_summaries_json",
         "commitment_mode", "committed_candidate_id", "current_plan_score",
-        "new_plan_score", "switch_margin", "switched_plan", "calculation_time_ms",
+        "new_plan_score", "switch_margin", "switched_plan", "committed_horizon_cm",
+        "new_horizon_cm", "committed_future_pass_viable", "new_future_pass_viable",
+        "switch_reason", "reverse_recovery_attempted", "reverse_distance_cm",
+        "reverse_steering_deg", "forward_after_reverse_candidate_id",
+        "recovery_min_clearance_cm", "recovery_final_score", "calculation_time_ms",
         "lap_completed", "straight_progress", "track_direction", "memory_states_json",
         "obstacle_distances_json",
     ]
@@ -687,6 +728,17 @@ def save_manual_recording(
                 "new_plan_score": decision.get("new_plan_score"),
                 "switch_margin": decision.get("switch_margin"),
                 "switched_plan": decision.get("switched_plan"),
+                "committed_horizon_cm": decision.get("committed_horizon_cm"),
+                "new_horizon_cm": decision.get("new_horizon_cm"),
+                "committed_future_pass_viable": decision.get("committed_future_pass_viable"),
+                "new_future_pass_viable": decision.get("new_future_pass_viable"),
+                "switch_reason": decision.get("switch_reason"),
+                "reverse_recovery_attempted": decision.get("reverse_recovery_attempted"),
+                "reverse_distance_cm": decision.get("reverse_distance_cm"),
+                "reverse_steering_deg": decision.get("reverse_steering_deg"),
+                "forward_after_reverse_candidate_id": decision.get("forward_after_reverse_candidate_id"),
+                "recovery_min_clearance_cm": decision.get("recovery_min_clearance_cm"),
+                "recovery_final_score": decision.get("recovery_final_score"),
                 "calculation_time_ms": decision.get("calculation_time_ms"),
                 "lap_completed": route.get("lap_completed"),
                 "straight_progress": route.get("straight_progress"),
@@ -895,7 +947,13 @@ def expanded_vehicle_corners(vehicle: Vehicle, margin_cm: float) -> list[tuple[f
     ]
 
 
-def draw_vehicle(surface: pygame.Surface, vehicle: Vehicle, fov_deg: float, safety_margin_cm: float) -> None:
+def draw_vehicle(
+    surface: pygame.Surface,
+    vehicle: Vehicle,
+    fov_deg: float,
+    safety_margin_cm: float,
+    forward_projection_cm: float = 30.0,
+) -> None:
     corners = [world_to_screen(p) for p in vehicle.corners()]
     pygame.draw.polygon(surface, (65, 110, 230), corners)
     pygame.draw.polygon(surface, (10, 30, 70), corners, 2)
@@ -933,8 +991,8 @@ def draw_vehicle(surface: pygame.Surface, vehicle: Vehicle, fov_deg: float, safe
         vehicle.y + math.sin(vehicle.heading) * CAR_LENGTH_CM / 2,
     )
     projection_end = (
-        projection_start[0] + math.cos(vehicle.heading) * FIXED_RULES.forward_projection_cm,
-        projection_start[1] + math.sin(vehicle.heading) * FIXED_RULES.forward_projection_cm,
+        projection_start[0] + math.cos(vehicle.heading) * forward_projection_cm,
+        projection_start[1] + math.sin(vehicle.heading) * forward_projection_cm,
     )
     pygame.draw.line(
         overlay,
@@ -1578,7 +1636,13 @@ def main() -> None:
             pygame.draw.lines(screen, (90, 90, 90), False, [world_to_screen(p) for p in vehicle.path], 1)
         draw_obstacles(screen, obstacles)
         draw_planner_overlay(screen, controller)
-        draw_vehicle(screen, vehicle, args.fov_deg, args.safety_margin_cm)
+        draw_vehicle(
+            screen,
+            vehicle,
+            args.fov_deg,
+            args.safety_margin_cm,
+            controller.planner.tuning.forward_projection_cm,
+        )
         panel = pygame.Rect(int(TRACK_CM * SCALE), 0, PANEL_WIDTH, int(TRACK_CM * SCALE))
         pygame.draw.rect(screen, (28, 32, 40), panel)
         panel_x = int(TRACK_CM * SCALE) + 10
@@ -1591,6 +1655,11 @@ def main() -> None:
 
         selected_radius = diagnostics.selected_radius_cm if diagnostics else vehicle.radius_cm()
         selected_angle = diagnostics.selected_angle_deg if diagnostics else vehicle.target_steering_deg
+        selected_horizon = (
+            diagnostics.new_horizon_cm
+            if diagnostics and diagnostics.new_horizon_cm > 0.0
+            else controller.planner.prediction_horizon_cm
+        )
         memory = "solo objetos visibles"
         saved_name = (
             last_probe_case.stem if args.decision_probe and last_probe_case
@@ -1679,8 +1748,8 @@ def main() -> None:
             ("clearance req / desired", f"{args.safety_margin_cm:.1f} / {args.desired_clearance_cm:.1f} cm"),
             ("straight projection", "clear" if diagnostics and diagnostics.straight_projection_safe else "blocked"),
             ("FOV / execute", f"{args.fov_deg:.1f} deg / {diagnostics.execution_horizon_cm:.1f} cm" if diagnostics else f"{args.fov_deg:.1f} deg / -"),
-            ("prediction / footprint", f"{controller.planner.prediction_horizon_cm:.1f} cm / full rotated rectangle"),
-            ("plan / dt", f"{controller.planner.prediction_horizon_cm:.1f} cm / {FIXED_RULES.simulation_dt_s:.2f} s"),
+            ("prediction / footprint", f"{selected_horizon:.1f} cm / full rotated rectangle"),
+            ("plan / dt", f"{selected_horizon:.1f} cm / {FIXED_RULES.simulation_dt_s:.2f} s"),
         ], (255, 205, 80))
         y = draw_panel_section(screen, panel_font, panel_x, y, panel_width, "Manual recording", [
             ("control", "arrows | S save JSON+CSV" if not args.decision_probe else "drag | LEFT/RIGHT rotate | E mark wrong | S save"),

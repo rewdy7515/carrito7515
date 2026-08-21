@@ -37,11 +37,17 @@ class AutonomousController:
         self._committed_pass_side = None
         self._remaining_primitives: list[MotionPrimitive] = []
         self._last_position: tuple[float, float] | None = None
+        self._last_result: PlannerResult | None = None
         self._tracked_obstacles: dict[str, VisibleObstacle] = {}
+        self._tracked_seen_at: dict[str, float] = {}
+        self._last_switch_reason: str | None = None
 
     def reset(self) -> None:
         self.active_target_id = None
         self._tracked_obstacles.clear()
+        self._tracked_seen_at.clear()
+        self._last_switch_reason = None
+        self._last_result = None
         self._clear_commitment()
 
     def _clear_commitment(self) -> None:
@@ -57,6 +63,17 @@ class AutonomousController:
         self._tracked_obstacles.update(
             {item.object_id: item for item in planner_input.visible_obstacles}
         )
+        for item in planner_input.visible_obstacles:
+            self._tracked_seen_at[item.object_id] = planner_input.timestamp_s
+        timeout = self.planner.tuning.memory_timeout_s
+        expired = [
+            object_id for object_id, last_seen in self._tracked_seen_at.items()
+            if object_id != self.active_target_id
+            and planner_input.timestamp_s - last_seen > timeout
+        ]
+        for object_id in expired:
+            self._tracked_seen_at.pop(object_id, None)
+            self._tracked_obstacles.pop(object_id, None)
         return replace(
             planner_input,
             tracked_obstacles=tuple(self._tracked_obstacles.values()),
@@ -109,10 +126,21 @@ class AutonomousController:
     def execution_horizon_cm(self, state: VehicleState) -> float:
         """Calcula cuánto se ejecuta antes de volver a comparar planes."""
         tuning = self.planner.tuning
-        # Estos parámetros ya están expresados como distancia. No se deben
-        # multiplicar por la velocidad: eso convertiría, por ejemplo, 6 cm a
-        # 144 cm a 24 cm/s y forzaría siempre el máximo de 15 cm.
-        return min(tuning.execution_horizon_min_cm, tuning.execution_horizon_max_cm)
+        # El intervalo temporal de replanning es independiente. Aquí solo se
+        # decide la distancia que se ejecuta antes de comparar otra vez.
+        result = self._last_result
+        diagnostics = result.diagnostics if result else None
+        has_target = bool(self.active_target_id or self._committed_target_id)
+        if not has_target:
+            return tuning.execution_horizon_max_cm
+        clearance = diagnostics.minimum_clearance_cm if diagnostics else math.inf
+        preferred = max(tuning.preferred_clearance_cm, 1e-9)
+        risk = 0.0 if not math.isfinite(clearance) else max(
+            0.0, min(1.0, (preferred - clearance) / preferred)
+        )
+        return tuning.execution_horizon_max_cm - risk * (
+            tuning.execution_horizon_max_cm - tuning.execution_horizon_min_cm
+        )
 
     def execution_interval_s(
         self, state: VehicleState, command_speed_cm_s: float,
@@ -128,13 +156,29 @@ class AutonomousController:
         new: CandidateTrajectory | None,
     ) -> bool:
         """Decide el cambio sin usar diferencias pequeñas de score."""
+        self._last_switch_reason = None
         if current is None:
+            self._last_switch_reason = "no_committed_plan"
             return new is not None
         if new is None or not new.safe:
+            self._last_switch_reason = "new_plan_not_safe"
             return False
         if not current.safe:
+            self._last_switch_reason = "committed_not_safe"
             return True
-        return new.score > current.score + self.planner.tuning.switch_margin
+        if not current.future_pass_viable and new.future_pass_viable:
+            self._last_switch_reason = "committed_future_pass_not_viable"
+            return True
+        current_horizon = max(current.horizon_cm or current.length_cm, 1.0)
+        new_horizon = max(new.horizon_cm or new.length_cm, 1.0)
+        current_normalized = current.score / current_horizon
+        new_normalized = new.score / new_horizon
+        normalized_margin = self.planner.tuning.switch_margin / current_horizon
+        if new_normalized > current_normalized + normalized_margin:
+            self._last_switch_reason = "new_plan_exceeds_normalized_switch_margin"
+            return True
+        self._last_switch_reason = "switch_margin_kept"
+        return False
 
     def _comparison_result(
         self,
@@ -155,7 +199,22 @@ class AutonomousController:
         )
         diagnostics.switch_margin = self.planner.tuning.switch_margin
         diagnostics.switched_plan = switched
+        diagnostics.switch_reason = self._last_switch_reason
         diagnostics.execution_horizon_cm = self.execution_horizon_cm(state)
+        diagnostics.committed_horizon_cm = (
+            current.horizon_cm if current else 0.0
+        )
+        diagnostics.new_horizon_cm = (
+            result.best_candidate.horizon_cm
+            if result.best_candidate else 0.0
+        )
+        diagnostics.committed_future_pass_viable = (
+            current.future_pass_viable if current else None
+        )
+        diagnostics.new_future_pass_viable = (
+            result.best_candidate.future_pass_viable
+            if result.best_candidate else None
+        )
 
         if current is not None:
             # Se muestran las alternativas nuevas junto con el resto del plan
@@ -227,6 +286,8 @@ class AutonomousController:
             # evita oscilaciones aun cuando aparezca una alternativa cercana.
             result.diagnostics.active_target_id = self.active_target_id
 
-        return self._comparison_result(
+        compared = self._comparison_result(
             result, committed, current, switched, data.vehicle_state,
         )
+        self._last_result = compared
+        return compared

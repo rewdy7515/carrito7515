@@ -42,17 +42,19 @@ class PreferredSafetyMargins:
 class PlannerTuning:
     """Únicamente parámetros TUNABLE que afectan la elección del trayecto."""
 
-    planning_horizon_cm: float = FIXED_RULES.prediction_horizon_cm
+    planning_horizon_cm: float = 50.0
     prediction_segments: int = 3
     beam_width: int = 4
-    # Perfiles históricos de steering que se conservan porque el beam actual
-    # los usa como magnitudes reales de rueda, no como fracciones aleatorias.
+    # Fracciones del límite físico usadas por la única familia de generación.
     steering_fractions: tuple[float, ...] = (0.5, 1.0)
-    turn_angles_deg: tuple[float, ...] = (15.0, 10.0, 5.0, 0.0)
-    counter_steer_angles_deg: tuple[float, ...] = (15.0, 10.0, 5.0, 0.0)
-    reverse_probe_distances_cm: tuple[float, ...] = (2.0, 5.0, 10.0)
+    post_pass_margin_cm: float = 10.0
+    pass_progress_reward: float = 8.0
+    wrong_pass_side_penalty: float = 100.0
+    reverse_step_cm: float = 4.0
+    max_reverse_recovery_cm: float = 16.0
+    forward_projection_cm: float = 30.0
+    route_alignment_tolerance_deg: float = 8.0
     replanning_period_s: float = 0.20
-    planning_horizon_s: float = 2.0
     preview_horizon_s: float = 5.0
     execution_horizon_min_cm: float = 6.0
     execution_horizon_max_cm: float = 15.0
@@ -82,22 +84,18 @@ class PlannerTuning:
             for fraction in self.steering_fractions
         ):
             raise ValueError("steering_fractions debe estar entre 0 y 1")
-        for name, angles in (
-            ("turn_angles_deg", self.turn_angles_deg),
-            ("counter_steer_angles_deg", self.counter_steer_angles_deg),
-        ):
-            if not angles or any(angle < 0.0 for angle in angles):
-                raise ValueError(f"{name} debe contener ángulos no negativos")
-            if any(angle > FIXED_RULES.maximum_physical_steering_deg for angle in angles):
-                raise ValueError(f"{name} supera el steering físico máximo")
-        if not self.reverse_probe_distances_cm or any(
-            distance <= 0.0 for distance in self.reverse_probe_distances_cm
-        ):
-            raise ValueError("reverse_probe_distances_cm debe contener distancias positivas")
+        if self.post_pass_margin_cm < 0.0:
+            raise ValueError("post_pass_margin_cm no puede ser negativo")
+        if self.pass_progress_reward < 0.0 or self.wrong_pass_side_penalty < 0.0:
+            raise ValueError("Los pesos de pass side no pueden ser negativos")
+        if self.reverse_step_cm <= 0.0 or self.max_reverse_recovery_cm < self.reverse_step_cm:
+            raise ValueError("La recuperación reverse incremental es inválida")
+        if self.forward_projection_cm <= 0.0 or self.route_alignment_tolerance_deg < 0.0:
+            raise ValueError("Los parámetros de ayuda de ruta son inválidos")
         if self.replanning_period_s <= 0.0:
             raise ValueError("replanning_period_s debe ser positivo")
-        if self.planning_horizon_s <= 0.0 or self.preview_horizon_s < self.planning_horizon_s:
-            raise ValueError("Los horizontes temporales del planner son inválidos")
+        if self.preview_horizon_s <= 0.0:
+            raise ValueError("preview_horizon_s debe ser positivo")
         if self.execution_horizon_min_cm <= 0.0:
             raise ValueError("execution_horizon_min_cm debe ser positivo")
         if self.execution_horizon_max_cm < self.execution_horizon_min_cm:
@@ -177,7 +175,7 @@ def load_planner_tuning(path: str | Path | None = None) -> PlannerTuning:
         "max_steering_rate_deg_s", "max_acceleration_cm_s2",
         "max_deceleration_cm_s2",
         "mandatory_clearance_cm", "desired_clearance_cm", "safety_margins",
-        "phase_transitions",
+        "phase_transitions", "planning_horizon_s",
     ):
         values.pop(key, None)
 
@@ -206,10 +204,7 @@ def load_planner_tuning(path: str | Path | None = None) -> PlannerTuning:
 
     known = {item.name for item in fields(PlannerTuning)}
     values = {key: value for key, value in values.items() if key in known}
-    for key in (
-        "steering_fractions", "turn_angles_deg", "counter_steer_angles_deg",
-        "reverse_probe_distances_cm",
-    ):
+    for key in ("steering_fractions",):
         if key in values:
             values[key] = _tuple_values(values[key], key)
     return PlannerTuning(**values).validate()

@@ -8,25 +8,68 @@
   "completed_lap": false,
   "collision": false,
   "lap_time_s": null,
-  "min_clearance_cm": 3.146,
-  "distance_traveled_cm": 238.6875,
+  "min_clearance_cm": 0.503,
+  "distance_traveled_cm": 3458.3625,
   "reverse_count": 0,
-  "rule_violations": [],
-  "obstacles_passed": 0,
+  "rule_violations": [
+    {
+      "obstacle_id": 2,
+      "color": "green",
+      "straight": "left",
+      "expected_side": "left",
+      "actual_side": "right"
+    },
+    {
+      "obstacle_id": 3,
+      "color": "red",
+      "straight": "top",
+      "expected_side": "right",
+      "actual_side": "left"
+    },
+    {
+      "obstacle_id": 4,
+      "color": "green",
+      "straight": "top",
+      "expected_side": "left",
+      "actual_side": "right"
+    },
+    {
+      "obstacle_id": 2,
+      "color": "green",
+      "straight": "left",
+      "expected_side": "left",
+      "actual_side": "right"
+    },
+    {
+      "obstacle_id": 3,
+      "color": "red",
+      "straight": "top",
+      "expected_side": "right",
+      "actual_side": "left"
+    },
+    {
+      "obstacle_id": 4,
+      "color": "green",
+      "straight": "top",
+      "expected_side": "left",
+      "actual_side": "right"
+    }
+  ],
+  "obstacles_passed": 11,
   "obstacle_pass_counts": {
-    "1": 0,
-    "2": 0,
-    "3": 0,
-    "4": 0,
-    "5": 0
+    "1": 2,
+    "2": 3,
+    "3": 2,
+    "4": 2,
+    "5": 2
   },
   "all_obstacles_crossed_three_times": false,
   "termination_reason": "running",
   "failure_location": {
     "lap": 1,
     "straight": 1,
-    "step": 593
+    "step": 2894
   },
-  "steps": 593,
-  "simulation_time_s": 29.65
+  "steps": 2894,
+  "simulation_time_s": 144.7
 }

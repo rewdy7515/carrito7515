@@ -89,10 +89,6 @@ class FixedRules:
     vision_safe_zone_top_ratio: float = float(_PHYSICAL.get("vision", {}).get("safe_zone_top_ratio", 0.68))
     horizontal_fov_deg: float = 70.4
     perception_range_cm: float = 120.0
-    forward_projection_cm: float = 30.0
-    # El beam search cubre 50 cm, siempre dentro del alcance de percepción.
-    prediction_horizon_cm: float = 50.0
-    route_alignment_tolerance_deg: float = 8.0
     simulation_dt_s: float = 0.05
     # Dinámica fijada por la configuración física actual del simulador. Estos
     # valores no son knobs de optimización del planner.
